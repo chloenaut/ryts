@@ -5,7 +5,7 @@ use select::document::Document;
 use select::predicate::Name;
 use indicatif::{ProgressBar, ProgressStyle};
 // use tokio::{io::{AsyncBufReadExt, BufReader}, process::Command};
-use std::{borrow::Cow, io, process::{exit,Command}};
+use std::{borrow::Cow, io::{self, Write}, process::{exit,Command,Stdio}};
 extern crate skim;
 use skim::prelude::*;
 // extern crate clap;
@@ -114,15 +114,22 @@ impl ResponseList {
     }
 }
 
-async fn get_yt_data( url: String) -> Result<String, reqwest::Error> {
-    let resp = reqwest::get(url).await?
-      .text_with_charset("utf-8")
-      .await.expect("could not fetch yt");
-    Ok(resp)
+async fn get_yt_data( url: String, show_load: bool ) -> Result<String, reqwest::Error> {
+    if show_load {
+        let loading_icon: ProgressBar = ProgressBar::new_spinner();
+        loading_icon.set_style(ProgressStyle::default_bar().template("{spinner} {msg}").tick_strings(&[".   ", "..  ", "... ", "...."]));
+        loading_icon.set_message("fetching youtube data");
+        let resp = reqwest::get(url).await?.text_with_charset("utf-8").await.expect("could not fetch yt");
+        loading_icon.finish();
+        Ok(resp)
+    } else {
+        let resp = reqwest::get(url).await?.text_with_charset("utf-8").await.expect("could not fetch yt");
+        Ok(resp)
+    }
 }
 
 
-async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseList,reqwest::Error> {
+async fn search_for_generic(query: &str, search_type: char, show_load: bool) -> Result<ResponseList,reqwest::Error> {
     let mut result_list = ResponseList::new();
     let mut search_url = ["https://www.youtube.com/results?search_query=", &query].concat();
     match search_type {
@@ -131,11 +138,7 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
         'v' => search_url = [&search_url,"&sp=EgIQAQ%253D%253D" ].concat(),
         _ => ()
     }
-    let loading_icon: ProgressBar = ProgressBar::new_spinner();
-    loading_icon.set_style(ProgressStyle::default_bar().template("{spinner} {msg}").tick_strings(&[".   ", "..  ", "... ", "...."]));
-    loading_icon.set_message("fetching youtube data");
-    let resp: String = get_yt_data(search_url).await?;
-    loading_icon.finish();
+    let resp: String = get_yt_data(search_url, show_load).await?;
     let doc = Document::from_read(resp.as_bytes()).unwrap();
     for node in doc.find(Name("script")) {
         if node.text().find("var ytInitialData =") != None {
@@ -164,13 +167,9 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
     Ok(result_list)
 }
 
-async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest::Error> {
+async fn get_channel_videos(channel_id: String, show_load: bool) -> Result<ResponseList, reqwest::Error> {
     let mut result_list = ResponseList::new();
-    let loading_icon: ProgressBar = ProgressBar::new_spinner();
-    loading_icon.set_style(ProgressStyle::default_bar().template("{spinner} {msg}").tick_strings(&[".   ", "..  ", "... ", "...."]));
-    loading_icon.set_message("fetching youtube data");
-    let resp = get_yt_data(["https://www.youtube.com/channel/", &channel_id, "/videos"].concat()).await?;
-    loading_icon.finish();
+    let resp = get_yt_data(["https://www.youtube.com/channel/", &channel_id, "/videos"].concat(), show_load).await?;
     let doc = Document::from_read(resp.as_bytes()).unwrap();
     for node in doc.find(Name("script")) {
         if node.text().find("var ytInitialData =") != None {
@@ -191,30 +190,42 @@ async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest:
    Ok(result_list)
 }
 
-// if escape pressed video is still selected //:w
-fn skim_prompt(prompt: ResponseList) -> Vec<String> {
-    let binds: Vec<&str> = vec!["esc:execute(exit 0)+abort"];
-    let options = SkimOptionsBuilder::default()
-        .height(Some("50%")).bind(binds)
-        .build()
-        .unwrap();
-    let item_reader = SkimItemReader::default();
-    let items = item_reader.of_bufread(io::Cursor::new(prompt.item_text));
-    let output = Skim::run_with(&options, Some(items)).unwrap();
-    let mut selected_item = String::new();
+fn display_prompt(prompt: ResponseList, is_gui: bool) -> Vec<String> {
+    let mut abort: bool = false;
+    let mut selected_name= String::new();
+    if is_gui {
+        let mut dmenu = Command::new("dmenu").arg("-i").arg("-l").arg("20").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
+        dmenu.stdin.as_mut()
+            .ok_or("Child process stdin has not been captured!").unwrap().write_all(prompt.item_text.as_bytes()).unwrap();
+        let output = dmenu.wait_with_output().unwrap();
+        if output.status.success() {
+            selected_name = String::from_utf8(output.clone().stdout).unwrap();
+            selected_name = selected_name.replace("\n","").replace("\r", "");
+            if selected_name.is_empty() { abort = true; }
+        } else { abort = true }
+    } else {
+        let binds: Vec<&str> = vec!["esc:execute(exit 0)+abort"];
+        let options = SkimOptionsBuilder::default()
+            .height(Some("50%")).bind(binds)
+            .build()
+            .unwrap();
+        let item_reader = SkimItemReader::default();
+        let items = item_reader.of_bufread(io::Cursor::new(prompt.item_text));
+        let output = Skim::run_with(&options, Some(items)).unwrap();
+        for items in output.selected_items.iter() { selected_name= items.output().to_string(); }
+        if output.is_abort { abort = true; }
+    }
     let mut selected_type = String::new();
     let mut selected_id = String::new();
-    for items in output.selected_items.iter() { selected_item = items.output().to_string(); }
-        for i in 0..prompt.item_list.len() {
-            let item = prompt.item_list.get(i).unwrap();
-            if item.name == selected_item {
-                selected_id = item.id.clone();
-                selected_type = item.item_type.clone();
-            }
+    if abort { return vec![selected_id, selected_type, selected_name, "aborted".to_string()] }
+    for i in 0..prompt.item_list.len() {
+        let item = prompt.item_list.get(i).unwrap();
+        if item.name == selected_name{
+            selected_id = item.id.clone();
+            selected_type = item.item_type.clone();
         }
-    let mut out = vec![selected_id, selected_type, selected_item];
-    if output.is_abort { out.push("aborted".to_string()); }
-    out
+    }
+    vec![selected_id, selected_type, selected_name]
 }
 
 fn launch_mpv(video_link: String, video_title: String) {
@@ -238,7 +249,13 @@ struct Opt {
     #[structopt(name="subscriptions", short="s", help="search for video")]
     subscription: bool,
     #[structopt(name="query",required(true))]
-    query: String
+    query: String,
+    #[structopt(name="gui", short="g", help="prompt with dmenu")]
+    is_gui: bool,
+    #[structopt(name="by id", short="i", help="get by id")]
+    by_id: bool,
+    #[structopt(name="no prompt", short="n", help="don\'t show prompt just list results")]
+    no_prompt: bool
 }
 
 #[tokio::main]
@@ -249,12 +266,14 @@ async fn main() {
     if opt.channel { search_mod = 'c' }
     if opt.video { search_mod = 'v' }
     if opt.playlist { search_mod = 'p' }
+    let show_load = !(opt.is_gui || opt.no_prompt);
     // Sanitize and search
     let query = &sanitize_query(opt.query).to_string();
-    let search_result = search_for_generic(query, search_mod).await.expect("cannot fetch yt");
+    let search_result = search_for_generic(query, search_mod, show_load ).await.expect("cannot fetch yt");
+    if opt.no_prompt { println!("{}", search_result.item_text); exit(0) }
     // Display prompt and get selection
     loop {
-        let prompt_res = skim_prompt(search_result.clone());
+        let prompt_res: Vec<String> = display_prompt(search_result.clone(), opt.is_gui);
         if prompt_res.get(3).is_some() { exit(0) }
         let selected_id: String = prompt_res.get(0).expect("could not get selection id").clone();
         let selected_type: String = prompt_res.get(1).expect("could not get selection type").clone();
@@ -262,9 +281,9 @@ async fn main() {
             "playlist" => { launch_mpv("https://youtube.com/playlist?list=".to_string()+ selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
             "video" => { launch_mpv("https://youtu.be/".to_string() + selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
             "channel" => {
-                let channel_videos = get_channel_videos(selected_id).await.expect("cannot get channel videos");
+                let channel_videos = get_channel_videos(selected_id, show_load).await.expect("cannot get channel videos");
                 loop {
-                    let prompt = skim_prompt(channel_videos.clone());
+                    let prompt = display_prompt(channel_videos.clone(), opt.is_gui);
                     if prompt.get(3).is_some() { break }
                     launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
                 }
