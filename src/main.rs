@@ -42,13 +42,7 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
 	}
 }
 
-#[derive(Clone)]
-struct Item {
-	id: String,
-	name: String,
-	item_type: String,
-	// item_info: Box<dyn YtItem>
-}
+
 
 // #[derive(Clone, Default)]
 // struct Playlist {
@@ -92,6 +86,13 @@ struct Item {
 // }
 
 // dyn_clone::clone_trait_object!(YtItem);
+#[derive(Clone)]
+struct Item {
+	id: String,
+	name: String,
+	item_type: String,
+	// item_info: Box<dyn YtItem>
+}
 
 #[derive(Clone)]
 struct ResponseList{
@@ -106,7 +107,7 @@ impl ResponseList {
 	pub fn add_item(&mut self, item: Item) {
 		let item_c = item.clone();
 		self.item_list.push(item);
-		self.item_text = self.item_text.clone() + item_c.name.as_str() + "	" + item_c.id.as_str() + "\n";
+		self.item_text = self.item_text.clone() + "(" + item_c.item_type.as_str() + ") " + item_c.name.as_str() + "\t" + item_c.id.as_str() + "\n";
 	}
 }
 
