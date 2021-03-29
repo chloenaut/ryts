@@ -129,12 +129,13 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
 	let resp: String = get_yt_data(search_url).await?;
 	let doc = Document::from_read(resp.as_bytes()).unwrap();
 	for node in doc.find(Name("script")) {
-		if node.text().find("var ytInitialData =") != None {
-			let node_text = node.text();
-			let scr_txt = get_json(&node_text).unwrap();
-			let json: serde_json::Value =
-				serde_json::from_str(scr_txt).unwrap();
-			let search_contents: &Vec<serde_json::Value> = json["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]["contents"].as_array().unwrap();
+		let node_text = node.text();
+		let scr_txt = get_json(&node_text);
+		if scr_txt != None {
+			let json: serde_json::Value = serde_json::from_str(scr_txt.unwrap()).unwrap();
+			let search_contents: &Vec<serde_json::Value> = json["contents"]
+				["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"][0]
+				["itemSectionRenderer"]["contents"].as_array().unwrap();
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("videoRenderer") != None {
 					let vid_id = search_contents[i]["videoRenderer"]["videoId"].as_str().unwrap();
@@ -155,17 +156,47 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
 	Ok(result_list)
 }
 
+async fn get_playlist_videos(playlist_id: String) -> Result<ResponseList, reqwest::Error> {
+	let mut result_list = ResponseList::new();
+	let resp = get_yt_data(["http://www.youtube.com/playlist?list=", &playlist_id].concat()).await?;
+	let doc = Document::from_read(resp.as_bytes()).unwrap();
+	for node in doc.find(Name("script")) {
+		let node_text = node.text();
+		let scr_txt = get_json(&node_text);
+		if scr_txt != None {
+			let json: serde_json::Value = serde_json::from_str(scr_txt.unwrap()).unwrap();
+			let search_contents = json["contents"]
+				["twoColumnBrowseResultsRenderer"]["tabs"][0]
+				["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
+				["itemSectionRenderer"]["contents"][0]
+				["playlistVideoListRenderer"]["contents"].as_array().expect("could not get playlist json");
+			for i in 0..search_contents.len() {
+				if search_contents[i].get("playlistVideoRenderer") != None {
+					let vid_id = search_contents[i]["playlistVideoRenderer"]["videoId"].as_str().unwrap();
+					let vid_title = search_contents[i]["playlistVideoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
+					result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
+				}
+			}
+		}
+	}
+	Ok(result_list)
+}
+
 async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest::Error> {
 	let mut result_list = ResponseList::new();
 	let resp = get_yt_data(["https://www.youtube.com/channel/", &channel_id, "/videos"].concat()).await?;
 	let doc = Document::from_read(resp.as_bytes()).unwrap();
 	for node in doc.find(Name("script")) {
-		if node.text().find("var ytInitialData =") != None {
-			let node_text = node.text();
-			let scr_txt = get_json(&node_text).unwrap();
+		let node_text = node.text();
+		let scr_txt = get_json(&node_text);
+		if scr_txt != None {		
 			let json: serde_json::Value =
-				serde_json::from_str(scr_txt).unwrap();
-			let search_contents: &Vec<serde_json::Value> = json["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][1]["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]["contents"][0]["gridRenderer"]["items"].as_array().unwrap();
+				serde_json::from_str(scr_txt.unwrap()).unwrap();
+			let search_contents: &Vec<serde_json::Value> = json["contents"]
+				["twoColumnBrowseResultsRenderer"]["tabs"][1]
+				["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
+				["itemSectionRenderer"]["contents"][0]
+				["gridRenderer"]["items"].as_array().unwrap();
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("gridVideoRenderer") != None {
 					let vid_id = search_contents[i]["gridVideoRenderer"]["videoId"].as_str().unwrap();
@@ -194,6 +225,8 @@ enum Subcommands {
 	Id(IdOpts),
 	#[structopt(name = "ch", group = ArgGroup::with_name("search"))]
 	Ch(ChOpts),
+	#[structopt(name = "pl")]
+	Pl(PlOpts),
 }
 
 #[derive(StructOpt, Debug)]
@@ -211,7 +244,7 @@ struct SeOpts {
 }
 
 #[derive(StructOpt, Debug)]
-struct IdOpts{
+struct IdOpts	{
 	#[structopt(name="channel", short="c", help="get channel link", group="search")]
     channel: bool,
     #[structopt(name="playlist", short="p", help="get playlist link", group="search")]
@@ -225,13 +258,19 @@ struct IdOpts{
 }
 
 #[derive(StructOpt, Debug)]
-struct ChOpts{
+struct ChOpts {
 	#[structopt(name="playlist", short="p", help="get channel playlist", group="search")]
     playlist: bool,
     #[structopt(name="video", short="v", help="get channel video", group="search")]
     video: bool,
 	#[structopt(name="id", required=true)]
 	id: String,
+}
+
+#[derive(StructOpt, Debug)]
+struct PlOpts {
+	#[structopt(name="id", required=true)]
+	id: String
 }
 
 async fn handle_subcommand(opt: Opts){
@@ -283,8 +322,11 @@ async fn handle_subcommand(opt: Opts){
 				let search_result = get_channel_videos(cfg.id).await.expect("could not get channel videos");
 				println!("{}", search_result.item_text);
 			}
+		},
+		Subcommands::Pl(cfg) => {
+			let search_result = get_playlist_videos(cfg.id).await.expect("could not get playlist videos");
+			println!("{}", search_result.item_text);
 		}
-		
     }
 }
 
