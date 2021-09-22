@@ -4,8 +4,10 @@
 use regex::Regex;
 use select::document::Document;
 use select::predicate::Name;
-use std::{borrow::Cow, process::{exit,Command,Stdio}};
+use std::{borrow::Cow, io::{self, Write}, process::{exit,Command,Stdio}};
 use structopt::{clap::ArgGroup, StructOpt};
+extern crate skim;
+use skim::prelude::*;
 // use dyn_clone::DynClone;
 
 fn get_json<'a>(text:&'a str) -> Option<&'a str> {
@@ -42,50 +44,6 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
 	}
 }
 
-
-
-// #[derive(Clone, Default)]
-// struct Playlist {
-
-// }
-
-// impl YtItem for Playlist {
-//     fn display_info(&self) -> String {
-//         let info = "id: ".to_string() + self.id.as_str();
-//         info
-//     }
-//     fn get_id(&self) -> String {
-//         self.id.clone()
-//     }
-//     fn get_name(&self) -> String {
-//         self.title.clone()
-//     }
-// }
-
-// #[derive(Clone, Default)]
-// struct Video {
-// }
-
-// impl YtItem for Video {
-//     fn display_info(&self) -> String {
-//         let info = "id : ".to_string() + self.id.as_str();
-//         info
-//     }
-//     fn get_id(&self) -> String {
-//         self.id.clone()
-//     }
-//     fn get_name(&self) -> String {
-//         self.title.clone()
-//     }
-// }
-
-// trait YtItem: DynClone {
-//     fn display_info(&self) -> String;
-//     fn get_id(&self) -> String;
-//     fn get_name(&self) -> String;
-// }
-
-// dyn_clone::clone_trait_object!(YtItem);
 #[derive(Clone)]
 struct Item {
 	id: String,
@@ -115,7 +73,6 @@ async fn get_yt_data( url: String) -> Result<String, reqwest::Error> {
 	let resp = reqwest::get(url).await?.text_with_charset("utf-8").await.expect("could not fetch yt");
 	Ok(resp)
 }
-
 
 async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseList,reqwest::Error> {
 	let mut result_list = ResponseList::new();
@@ -209,6 +166,76 @@ async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest:
    Ok(result_list)
 }
 
+fn display_prompt(prompt: ResponseList) -> Vec<String> {
+    let mut abort: bool = false;
+    let mut selected_name= String::new();
+	let binds: Vec<&str> = vec!["esc:execute(exit 0)+abort"];
+	let options = SkimOptionsBuilder::default()
+		.height(Some("50%")).bind(binds)
+		.build()
+		.unwrap();
+	let item_reader = SkimItemReader::default();
+	let items = item_reader.of_bufread(io::Cursor::new(prompt.item_text));
+	let output = Skim::run_with(&options, Some(items)).unwrap();
+	for items in output.selected_items.iter() { selected_name = items.output().to_string(); }
+	if output.is_abort { abort = true; }
+
+    let mut selected_type = String::new();
+    let mut selected_id = String::new();
+    if abort { return vec![selected_id, selected_type, selected_name, "aborted".to_string()] }
+    for i in 0..prompt.item_list.len() {
+        let item = prompt.item_list.get(i).unwrap();
+        if selected_name.contains(item.id.as_str().clone()) {
+            selected_id = item.id.clone();
+            selected_type = item.item_type.clone();
+        }
+    }
+    vec![selected_id, selected_type, selected_name]
+}
+
+async fn play_video(search_result: ResponseList) {
+	loop {
+        let prompt_res: Vec<String> = display_prompt(search_result.clone());
+		println!("{}", prompt_res.get(0).expect("could not get selection id"));
+		println!("{}", prompt_res.get(1).expect("could not get selection type"));
+        if prompt_res.get(3).is_some() { exit(0) }
+        let selected_id: String = prompt_res.get(0).expect("could not get selection id").clone();
+        let selected_type: String = prompt_res.get(1).expect("could not get selection type").clone();
+        match selected_type.clone().as_str() {
+			"playlist" =>{
+				let playlist_videos = get_playlist_videos(selected_id).await.expect("cannot get playlist videos");
+				loop {
+                    let prompt = display_prompt(playlist_videos.clone());
+					if prompt.get(3).is_some(){ break }
+					launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
+				}
+			}, //launch_mpv("https://youtube.com/playlist?list=".to_string()+ selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
+            "video" => { launch_mpv("https://youtu.be/".to_string() + selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
+            "channel" => {
+                let channel_videos = get_channel_videos(selected_id).await.expect("cannot get channel videos");
+                loop {
+                    let prompt = display_prompt(channel_videos.clone());
+                    if prompt.get(3).is_some() { break }
+                    launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
+                }
+            },
+            _ => {
+                println!("error getting search item type: {}", selected_type);
+                exit(1);
+            }
+        }
+    }
+}
+
+fn launch_mpv(video_link: String, video_title: String) {
+    println!("Playing video {}", video_title);
+    let _output = Command::new("mpv")
+            .arg(video_link)
+            .arg("--hwdec=vaapi")
+            .arg("--ytdl-format=bestvideo[ext=mp4][height<=?720]+bestaudio[ext=m4a]")
+            .output().expect("failed to launch mpv");
+}
+
 #[derive(StructOpt, Debug)]
 #[structopt(name="ryts", no_version)]
 struct Opts {
@@ -282,7 +309,8 @@ async fn handle_subcommand(opt: Opts){
 			if cfg.channel { search_mod = 'c' }
 			let query = &sanitize_query(cfg.query.unwrap()).to_string();
 	 		let search_result = search_for_generic(query, search_mod).await.expect("could not fetch youtube");
-			println!("{}", search_result.item_text);
+			// println!("{}", search_result.item_text);
+			play_video(search_result).await;
 		},
 		Subcommands::Id(cfg) => {
 			let id = cfg.id.trim().to_string();
@@ -317,7 +345,6 @@ async fn handle_subcommand(opt: Opts){
 				}
 			},
 		Subcommands::Ch(cfg) => {
-			//println!("handle Ch: {:?}", cfg);
 			if cfg.video { 
 				let search_result = get_channel_videos(cfg.id).await.expect("could not get channel videos");
 				println!("{}", search_result.item_text);
