@@ -101,7 +101,6 @@ impl ResponseList {
 		self.item_list.push(item.clone());
 		use ListItem::*;
 		match item { 
-//❰{}❱
 			Video(v) => self.item_text = format!("{}▶ {:<40} {:<100} {:<10} {}\n", self.item_text.clone(),&v.channel_name,&v.item_data.name ,&v.length, &v.item_data.id),
 			Playlist(p) => self.item_text = format!("{}≡ {} | ▶ {}\n", self.item_text.clone(), &p.item_data.to_owned().get_item_text(), &p.video_count.to_string()),
 			Channel(c) => self.item_text = format!("{}@ {}\n",self.item_text.clone(),&c.item_data.to_owned().get_item_text()),
@@ -137,30 +136,25 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("videoRenderer") != None {
 					let vid = search_contents[i]["videoRenderer"].clone();
-					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
-					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
-					let vid_channel = vid["ownerText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
-					let vid_length = vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string();
 					result_list.add_item(&ListItem::Video(
 							VideoItem {
 								item_data: Item {
-											id: vid_id,
-											name: vid_title,
-											item_type: "video".to_string() },
-								length: vid_length,
-								channel_name: vid_channel
+									id: vid["videoId"].as_str().unwrap_or_default().to_string(),
+									name: vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string(),
+									item_type: "video".to_string() 
+								},
+								length: vid["ownerText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string(),
+								channel_name: vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string()
 							}));
 				} else if search_contents[i].get("playlistRenderer") != None {
 					let playlist = search_contents[i]["playlistRenderer"].clone();
-					let playlist_id = playlist["playlistId"].as_str().unwrap().to_string();
-					let playlist_title = playlist["title"]["simpleText"].as_str().unwrap().to_string();
 					let playlist_vid_count: i32 = playlist["videoCount"].as_str().unwrap_or("0").parse().unwrap_or_default();
 					if playlist_vid_count > 1 {
 						result_list.add_item(&ListItem::Playlist(
 						   PlaylistItem {
 							   item_data: Item {
-								   id: playlist_id,
-								   name: playlist_title,
+								   id: playlist["playlistId"].as_str().unwrap().to_string(),
+								   name: playlist["title"]["simpleText"].as_str().unwrap().to_string(),
 								   item_type: "playlist".to_string()
 							   },
 							   video_count: playlist_vid_count
@@ -168,13 +162,11 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
 					}
 				} else if search_contents[i].get("channelRenderer") != None {
 					let channel = search_contents[i]["channelRenderer"].clone();
-					let channel_id = channel["channelId"].as_str().unwrap_or_default().to_string();
-					let channel_title = channel["title"]["simpleText"].as_str().unwrap_or_default().to_string();
 					result_list.add_item(&ListItem::Channel(
 						ChannelItem{
 							item_data: Item{
-								id: channel_id,
-								name: channel_title,
+								id: channel["channelId"].as_str().unwrap_or_default().to_string(),
+								name: channel["title"]["simpleText"].as_str().unwrap_or_default().to_string(),
 								item_type: "channel".to_string()
 							}
 						}));
@@ -202,18 +194,15 @@ async fn get_playlist_videos(playlist_id: String) -> Result<ResponseList, reqwes
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("playlistVideoRenderer") != None {
 					let vid = search_contents[i]["playlistVideoRenderer"].clone();
-					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
-					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
-					let vid_channel = vid["shortBylineText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
-					let vid_length = vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string();
 					result_list.add_item(&ListItem::Video(
 							VideoItem {
 								item_data: Item {
-											id: vid_id,
-											name: vid_title,
-											item_type: "video".to_string() },
-								length: vid_length,
-								channel_name: vid_channel
+									id: vid["videoId"].as_str().unwrap_or_default().to_string(),
+									name: vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string(),
+									item_type: "video".to_string() 
+								},
+								length: vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string(),
+								channel_name: vid["shortBylineText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string()
 							}));
 
 				}
@@ -241,18 +230,15 @@ async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest:
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("gridVideoRenderer") != None {
 					let vid = search_contents[i]["gridVideoRenderer"].clone();
-					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
-					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
-					let vid_channel = json["metadata"]["channelMetadataRenderer"]["title"].as_str().unwrap_or_default().to_string();
-					let vid_length: String = vid["thumbnailOverlays"][0]["thumbnailOverlayTimeStatusRenderer"]["text"]["simpleText"].as_str().unwrap_or_default().to_string();
 					result_list.add_item(&ListItem::Video(
 							VideoItem {
 								item_data: Item {
-											id: vid_id,
-											name: vid_title,
-											item_type: "video".to_string() },
-								length: vid_length,
-								channel_name: vid_channel
+									id: vid["videoId"].as_str().unwrap_or_default().to_string(),
+									name: vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string(),
+									item_type: "video".to_string() 
+								},
+								length: vid["thumbnailOverlays"][0]["thumbnailOverlayTimeStatusRenderer"]["text"]["simpleText"].as_str().unwrap_or_default().to_string(),
+								channel_name: json["metadata"]["channelMetadataRenderer"]["title"].as_str().unwrap_or_default().to_string()
 							}));
 				}
 			}
