@@ -7,7 +7,7 @@ A program to search youtube from the commandline\
 **Dependencies**\
 OpenSSL\
 mpv\
-dmenu\
+dmenu
 
 **Build instuctions**
 clone repo\
