@@ -9,6 +9,6 @@ OpenSSL\
 mpv\
 dmenu
 
-**Build instuctions**
+**Build instuctions**\
 clone repo\
 cargo build
