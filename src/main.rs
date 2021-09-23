@@ -44,17 +44,52 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
 	}
 }
 
+
+#[derive(Clone)]
+enum ListItem {
+	Video(VideoItem),
+	Playlist(PlaylistItem),
+	Channel(ChannelItem)
+}
+
 #[derive(Clone)]
 struct Item {
 	id: String,
 	name: String,
 	item_type: String,
-	// item_info: Box<dyn YtItem>
+}
+
+impl Item {
+	fn new() -> Item {
+		Item { id: String::new(), name: String::new(), item_type: String::new() }
+	}
+	fn get_item_text(&mut self) -> String {
+		let item_text: String = format!("{:<100} {}", self.name.as_str(), self.id.as_str());
+		item_text
+	}
+}
+
+#[derive(Clone)]
+struct VideoItem {
+	item_data: Item,
+	length: String,
+	channel_name: String
+}
+
+#[derive(Clone)]
+struct PlaylistItem {
+	item_data:Item,
+	video_count: i32,
+}
+
+#[derive(Clone)]
+struct ChannelItem {
+	item_data:Item
 }
 
 #[derive(Clone)]
 struct ResponseList{
-	item_list: Vec<Item>,
+	item_list: Vec<ListItem>,
 	item_text: String
 }
 
@@ -62,10 +97,15 @@ impl ResponseList {
 	fn new() -> ResponseList {
 		ResponseList { item_list: Vec::new(), item_text: String::new() }
 	}
-	pub fn add_item(&mut self, item: Item) {
-		let item_c = item.clone();
-		self.item_list.push(item);
-		self.item_text = self.item_text.clone() + "(" + item_c.item_type.as_str() + ") " + item_c.name.as_str() + "\t" + item_c.id.as_str() + "\n";
+	pub fn add_item(&mut self, item: &ListItem) {
+		self.item_list.push(item.clone());
+		use ListItem::*;
+		match item { 
+//❰{}❱
+			Video(v) => self.item_text = format!("{}▶ {:<40} {:<100} {:<10} {}\n", self.item_text.clone(),&v.channel_name,&v.item_data.name ,&v.length, &v.item_data.id),
+			Playlist(p) => self.item_text = format!("{}≡ {} | ▶ {}\n", self.item_text.clone(), &p.item_data.to_owned().get_item_text(), &p.video_count.to_string()),
+			Channel(c) => self.item_text = format!("{}@ {}\n",self.item_text.clone(),&c.item_data.to_owned().get_item_text()),
+		}
 	}
 }
 
@@ -89,23 +129,55 @@ async fn search_for_generic(query: &str, search_type: char) -> Result<ResponseLi
 		let node_text = node.text();
 		let scr_txt = get_json(&node_text);
 		if scr_txt != None {
-			let json: serde_json::Value = serde_json::from_str(scr_txt.unwrap()).unwrap();
+			let json: serde_json::Value = serde_json::from_str(scr_txt.unwrap_or_default()).unwrap();
+			let empty_ret: &Vec<serde_json::Value> = &Vec::<serde_json::Value>::new();
 			let search_contents: &Vec<serde_json::Value> = json["contents"]
 				["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"][0]
-				["itemSectionRenderer"]["contents"].as_array().unwrap();
+				["itemSectionRenderer"]["contents"].as_array().unwrap_or(empty_ret);
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("videoRenderer") != None {
-					let vid_id = search_contents[i]["videoRenderer"]["videoId"].as_str().unwrap();
-					let vid_title = search_contents[i]["videoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
-					result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
+					let vid = search_contents[i]["videoRenderer"].clone();
+					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
+					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
+					let vid_channel = vid["ownerText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
+					let vid_length = vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string();
+					result_list.add_item(&ListItem::Video(
+							VideoItem {
+								item_data: Item {
+											id: vid_id,
+											name: vid_title,
+											item_type: "video".to_string() },
+								length: vid_length,
+								channel_name: vid_channel
+							}));
 				} else if search_contents[i].get("playlistRenderer") != None {
-					let playlist_id = search_contents[i]["playlistRenderer"]["playlistId"].as_str().unwrap();
-					let playlist_title = search_contents[i]["playlistRenderer"]["title"]["simpleText"].as_str().unwrap();
-				   result_list.add_item(Item{id: playlist_id.to_string(), name: playlist_title.to_string(), item_type: "playlist".to_string()});
+					let playlist = search_contents[i]["playlistRenderer"].clone();
+					let playlist_id = playlist["playlistId"].as_str().unwrap().to_string();
+					let playlist_title = playlist["title"]["simpleText"].as_str().unwrap().to_string();
+					let playlist_vid_count: i32 = playlist["videoCount"].as_str().unwrap_or("0").parse().unwrap_or_default();
+					if playlist_vid_count > 1 {
+						result_list.add_item(&ListItem::Playlist(
+						   PlaylistItem {
+							   item_data: Item {
+								   id: playlist_id,
+								   name: playlist_title,
+								   item_type: "playlist".to_string()
+							   },
+							   video_count: playlist_vid_count
+						}));
+					}
 				} else if search_contents[i].get("channelRenderer") != None {
-					let channel_id = search_contents[i]["channelRenderer"]["channelId"].as_str().unwrap();
-					let channel_title = search_contents[i]["channelRenderer"]["title"]["simpleText"].as_str().unwrap();
-					result_list.add_item(Item{id: channel_id.to_string(), name: channel_title.to_string(), item_type: "channel".to_string()});
+					let channel = search_contents[i]["channelRenderer"].clone();
+					let channel_id = channel["channelId"].as_str().unwrap_or_default().to_string();
+					let channel_title = channel["title"]["simpleText"].as_str().unwrap_or_default().to_string();
+					result_list.add_item(&ListItem::Channel(
+						ChannelItem{
+							item_data: Item{
+								id: channel_id,
+								name: channel_title,
+								item_type: "channel".to_string()
+							}
+						}));
 				}
 			}
 		}
@@ -129,9 +201,21 @@ async fn get_playlist_videos(playlist_id: String) -> Result<ResponseList, reqwes
 				["playlistVideoListRenderer"]["contents"].as_array().expect("could not get playlist json");
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("playlistVideoRenderer") != None {
-					let vid_id = search_contents[i]["playlistVideoRenderer"]["videoId"].as_str().unwrap();
-					let vid_title = search_contents[i]["playlistVideoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
-					result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
+					let vid = search_contents[i]["playlistVideoRenderer"].clone();
+					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
+					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
+					let vid_channel = vid["shortBylineText"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
+					let vid_length = vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string();
+					result_list.add_item(&ListItem::Video(
+							VideoItem {
+								item_data: Item {
+											id: vid_id,
+											name: vid_title,
+											item_type: "video".to_string() },
+								length: vid_length,
+								channel_name: vid_channel
+							}));
+
 				}
 			}
 		}
@@ -146,19 +230,30 @@ async fn get_channel_videos(channel_id: String) -> Result<ResponseList, reqwest:
 	for node in doc.find(Name("script")) {
 		let node_text = node.text();
 		let scr_txt = get_json(&node_text);
-		if scr_txt != None {		
-			let json: serde_json::Value =
-				serde_json::from_str(scr_txt.unwrap()).unwrap();
+		if scr_txt != None {
+			let json: serde_json::Value = serde_json::from_str(scr_txt.unwrap()).unwrap();
+			let empty_ret = &Vec::<serde_json::Value>::new();
 			let search_contents: &Vec<serde_json::Value> = json["contents"]
 				["twoColumnBrowseResultsRenderer"]["tabs"][1]
 				["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]
 				["itemSectionRenderer"]["contents"][0]
-				["gridRenderer"]["items"].as_array().unwrap();
+				["gridRenderer"]["items"].as_array().unwrap_or(empty_ret);
 			for i in 0..search_contents.len() {
 				if search_contents[i].get("gridVideoRenderer") != None {
-					let vid_id = search_contents[i]["gridVideoRenderer"]["videoId"].as_str().unwrap();
-					let vid_title = search_contents[i]["gridVideoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
-					result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
+					let vid = search_contents[i]["gridVideoRenderer"].clone();
+					let vid_id = vid["videoId"].as_str().unwrap_or_default().to_string();
+					let vid_title = vid["title"]["runs"][0]["text"].as_str().unwrap_or_default().to_string();
+					let vid_channel = json["metadata"]["channelMetadataRenderer"]["title"].as_str().unwrap_or_default().to_string();
+					let vid_length: String = vid["thumbnailOverlays"][0]["thumbnailOverlayTimeStatusRenderer"]["text"]["simpleText"].as_str().unwrap_or_default().to_string();
+					result_list.add_item(&ListItem::Video(
+							VideoItem {
+								item_data: Item {
+											id: vid_id,
+											name: vid_title,
+											item_type: "video".to_string() },
+								length: vid_length,
+								channel_name: vid_channel
+							}));
 				}
 			}
 		}
@@ -184,10 +279,16 @@ fn display_prompt(prompt: ResponseList) -> Vec<String> {
     let mut selected_id = String::new();
     if abort { return vec![selected_id, selected_type, selected_name, "aborted".to_string()] }
     for i in 0..prompt.item_list.len() {
-        let item = prompt.item_list.get(i).unwrap();
-        if selected_name.contains(item.id.as_str().clone()) {
-            selected_id = item.id.clone();
-            selected_type = item.item_type.clone();
+        let item = prompt.item_list.get(i).unwrap().clone();
+		let item_data;
+		match item {
+			ListItem::Video(v) => item_data = v.item_data,
+			ListItem::Playlist(p) => item_data = p.item_data,
+			ListItem::Channel(c) => item_data = c.item_data,
+		}
+        if selected_name.contains(item_data.id.as_str().clone()) {
+            selected_id = item_data.id.clone();
+            selected_type = item_data.item_type.clone();
         }
     }
     vec![selected_id, selected_type, selected_name]
@@ -196,8 +297,6 @@ fn display_prompt(prompt: ResponseList) -> Vec<String> {
 async fn play_video(search_result: ResponseList) {
 	loop {
         let prompt_res: Vec<String> = display_prompt(search_result.clone());
-		println!("{}", prompt_res.get(0).expect("could not get selection id"));
-		println!("{}", prompt_res.get(1).expect("could not get selection type"));
         if prompt_res.get(3).is_some() { exit(0) }
         let selected_id: String = prompt_res.get(0).expect("could not get selection id").clone();
         let selected_type: String = prompt_res.get(1).expect("could not get selection type").clone();
@@ -213,14 +312,19 @@ async fn play_video(search_result: ResponseList) {
             "video" => { launch_mpv("https://youtu.be/".to_string() + selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
             "channel" => {
                 let channel_videos = get_channel_videos(selected_id).await.expect("cannot get channel videos");
-                loop {
-                    let prompt = display_prompt(channel_videos.clone());
-                    if prompt.get(3).is_some() { break }
-                    launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
-                }
+				if !channel_videos.item_list.is_empty() {
+					loop {
+						let prompt = display_prompt(channel_videos.clone());
+						if prompt.get(3).is_some() { break }
+						launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
+					}
+				} else {
+					eprintln!("channel video list is empty");
+				}
+
             },
             _ => {
-                println!("error getting search item type: {}", selected_type);
+                eprintln!("error getting search item type: {}", selected_type);
                 exit(1);
             }
         }
@@ -307,45 +411,49 @@ async fn handle_subcommand(opt: Opts){
 			if cfg.video { search_mod = 'v' }
 			if cfg.playlist { search_mod = 'p' }
 			if cfg.channel { search_mod = 'c' }
+			println!("Searching for {}...", cfg.query.clone().unwrap_or_default());
 			let query = &sanitize_query(cfg.query.unwrap()).to_string();
 	 		let search_result = search_for_generic(query, search_mod).await.expect("could not fetch youtube");
-			// println!("{}", search_result.item_text);
-			play_video(search_result).await;
+			if search_result.item_text.trim().is_empty() {
+				eprintln!("results are empty");
+			} else {
+				play_video(search_result).await;
+			}
 		},
 		Subcommands::Id(cfg) => {
 			let id = cfg.id.trim().to_string();
 			let mut search_mod = 's';
-			if cfg.video { search_mod = 'v' } 
+			if cfg.video { search_mod = 'v' }
 			if cfg.playlist { search_mod = 'p' }
-			if cfg.channel { search_mod = 'c' } 
-			let mut link = String::new();
-				match search_mod {
-					'c' => { 
-						link = ["https://www.youtube.com/channel/", &id, "/videos"].concat().to_string();
-						println!("{}", link);
-						exit(0);            
-					},
-					'v' => {
-						link = ["https://www.youtu.be/", &id].concat().to_string();
-						if cfg.thumbnail { link = "https://i.ytimg.com/vi/".to_string() + &id + "/hqdefault.jpg"}
-						println!("{}", link);
-						exit(0);
-					},
-					'p' => {
-						link = ["https://youtube.com/playlist?list=", &id].concat().to_string();
-						println!("{}", link);
-						exit(0);
-					},
-					_ => {
-						link = ["https://www.youtu.be/", &id].concat().to_string();
-						if cfg.thumbnail { link = "https://i.ytimg.com/vi/".to_string() + &id + "/hqdefault.jpg"}
-						println!("{}", link);
-						exit(0);
-					}
+			if cfg.channel { search_mod = 'c' }
+			let mut link;
+			match search_mod {
+				'c' => {
+					link = ["https://www.youtube.com/channel/", &id, "/videos"].concat().to_string();
+					println!("{}", link);
+					exit(0);
+				},
+				'v' => {
+					link = ["https://www.youtu.be/", &id].concat().to_string();
+					if cfg.thumbnail { link = "https://i.ytimg.com/vi/".to_string() + &id + "/hqdefault.jpg"}
+					println!("{}", link);
+					exit(0);
+				},
+				'p' => {
+					link = ["https://youtube.com/playlist?list=", &id].concat().to_string();
+					println!("{}", link);
+					exit(0);
+				},
+				_ => {
+					link = ["https://www.youtu.be/", &id].concat().to_string();
+					if cfg.thumbnail { link = "https://i.ytimg.com/vi/".to_string() + &id + "/hqdefault.jpg"}
+					println!("{}", link);
+					exit(0);
 				}
-			},
+			}
+		},
 		Subcommands::Ch(cfg) => {
-			if cfg.video { 
+			if cfg.video {
 				let search_result = get_channel_videos(cfg.id).await.expect("could not get channel videos");
 				println!("{}", search_result.item_text);
 			}
