@@ -1,2 +1,7 @@
 /target
 Cargo.lock
+test.html
+testNoFormat.html
+perf.*
+*.pl
+flame.svg
