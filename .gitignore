@@ -5,3 +5,4 @@ testNoFormat.html
 perf.*
 *.pl
 flame.svg
+/benchStuff
