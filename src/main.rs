@@ -1,25 +1,16 @@
-#![allow(dead_code)]
-#[macro_use] extern crate lazy_static;
-use regex::Regex;
-use select::document::Document;
-use select::predicate::Name;
-use indicatif::{ProgressBar, ProgressStyle};
-// use tokio::{io::{AsyncBufReadExt, BufReader}, process::Command};
-use std::{borrow::Cow, io::{self, Write}, process::{exit,Command,Stdio}};
+#[macro_use]
+extern crate lazy_static;
+use env_logger::Env;
+use crate::search_item::{ListItem, ListEnum, SearchResult, ResponseList};
+use crate::yt_json::{ parse_generic, parse_playlist, parse_channel, get_yt_json };
+use std::{borrow::Cow, io::Write, process::{exit, Stdio}};
+use structopt::{clap::ArgGroup, StructOpt};
+use tokio::process::Command;
 extern crate skim;
 use skim::prelude::*;
-// extern crate clap;
-// use dyn_clone::DynClone;
-use structopt::{clap::ArgGroup, StructOpt};
-
-fn get_json<'a>(text:&'a str) -> Option<&'a str> {
-   lazy_static! {
-      static ref RE: Regex = Regex::new(r"(?:var ytInitialData = )(?P<json>.*)(?:;)").unwrap();
-   }
-   RE.captures(text).and_then(|cap| {
-      cap.name("json").as_ref().map(|json| json.as_str())//.to_string())
-   })
-}
+mod yt_json;
+mod search_item;
+mod search;
 
 pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
     let input = input.into();
@@ -37,7 +28,7 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
                 '#' => output.push_str("%23"),
                 '&' => output.push_str("%26"),
                 ' ' => output.push_str("+"),
-                _ => output.push(c)
+                _ => output.push(c),
             }
         }
         Cow::Owned(output)
@@ -46,252 +37,361 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
     }
 }
 
-#[derive(Clone)]
-struct Item {
-    id: String,
-    name: String,
-    item_type: String,
-    // item_info: Box<dyn YtItem>
-}
 
-// #[derive(Clone, Default)]
-// struct Playlist {
-
+// fn disp_icat(id: String) {
+//     let status = std::process::Command::new("kitty")
+//         .arg("+kitten")
+//         .arg("icat")
+//         .arg(format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", id))
+//         .status().expect("failed to get icat");
+//     log::info!("Exit status: {}", status);
 // }
 
-// impl YtItem for Playlist {
-//     fn display_info(&self) -> String {
-//         let info = "id: ".to_string() + self.id.as_str();
-//         info
-//     }
-//     fn get_id(&self) -> String {
-//         self.id.clone()
-//     }
-//     fn get_name(&self) -> String {
-//         self.title.clone()
-//     }
-// }
-
-// #[derive(Clone, Default)]
-// struct Video {
-// }
-
-// impl YtItem for Video {
-//     fn display_info(&self) -> String {
-//         let info = "id : ".to_string() + self.id.as_str();
-//         info
-//     }
-//     fn get_id(&self) -> String {
-//         self.id.clone()
-//     }
-//     fn get_name(&self) -> String {
-//         self.title.clone()
-//     }
-// }
-
-// trait YtItem: DynClone {
-//     fn display_info(&self) -> String;
-//     fn get_id(&self) -> String;
-//     fn get_name(&self) -> String;
-// }
-
-// dyn_clone::clone_trait_object!(YtItem);
-
-#[derive(Clone)]
-struct ResponseList{
-    item_list: Vec<Item>,
-    item_text: String
-}
-
-impl ResponseList {
-    fn new() -> ResponseList {
-        ResponseList { item_list: Vec::new(), item_text: String::new() }
-    }
-    pub fn add_item(&mut self, item: Item) {
-        let item_c = item.clone();
-        self.item_list.push(item);
-        self.item_text = self.item_text.clone() + item_c.name.as_str() +"\n";
-    }
-}
-
-async fn get_yt_data( url: String, show_load: bool ) -> Result<String, reqwest::Error> {
-    if show_load {
-        let loading_icon: ProgressBar = ProgressBar::new_spinner();
-        loading_icon.set_style(ProgressStyle::default_bar().template("{spinner} {msg}").tick_strings(&[".   ", "..  ", "... ", "...."]));
-        loading_icon.set_message("fetching youtube data");
-        let resp = reqwest::get(url).await?.text_with_charset("utf-8").await.expect("could not fetch yt");
-        loading_icon.finish();
-        Ok(resp)
-    } else {
-        let resp = reqwest::get(url).await?.text_with_charset("utf-8").await.expect("could not fetch yt");
-        Ok(resp)
-    }
+//TODO optimize thumbnail shennanigans
+fn get_ansi_thumb(id: String) -> String {
+    let cmd = std::process::Command::new("pixterm")
+        .arg("-tc").arg("60")
+        .arg("-tr").arg("20")
+        .arg(format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", id))
+        .output().expect("could not get thumb");
+    String::from_utf8_lossy(&cmd.stdout).to_string()
 }
 
 
-async fn search_for_generic(query: &str, search_type: char, show_load: bool) -> Result<ResponseList,reqwest::Error> {
-    let mut result_list = ResponseList::new();
-    let mut search_url = ["https://www.youtube.com/results?search_query=", &query].concat();
-    match search_type {
-        'c' => search_url = [&search_url, "&sp=EgIQAg%253D%253D"].concat(),
-        'p' =>  search_url = [&search_url, "&sp=EgIQAw%253D%253D"].concat(),
-        'v' => search_url = [&search_url,"&sp=EgIQAQ%253D%253D" ].concat(),
-        _ => ()
+
+fn get_search_mod(search_mod: char) -> String {
+    match search_mod {
+        'c' => "&sp=EgIQAg%253D%253D",
+        'p' => "&sp=EgIQAw%253D%253D",
+        'v' => "&sp=EgIQAQ%253D%253D",
+        _ => (""),
+    }.to_string()
+}
+
+//TODO find some way to combine video search functions
+async fn yt_search(
+    query: String,
+    search_type: char,
+    search_mod: Option<char>
+) -> Result<ResponseList> {
+        let mut result_list = ResponseList::new();
+    let search_url = match search_type {
+        'g' => { format!("https://www.youtube.com/results?search_query={}{}", &query, get_search_mod(search_mod.unwrap_or_default()))},
+        'p' => { format!("https://www.youtube.com/playlist?list={}", &query) },
+        'c' => { format!("https://www.youtube.com/channel/{}/videos",&query) }
+        _ => {format!("https://www.youtube.com/results?search_query={}", &query)}
+    };
+    //search for specific type
+
+    let scr_txt = get_yt_json(search_url).await;
+    if scr_txt.is_empty() { return Ok(result_list) }
+   
+    return Ok(match search_type{
+            'g' => parse_generic(&mut result_list, scr_txt),
+            'p' => parse_playlist(&mut result_list, scr_txt),
+            'c' => parse_channel(&mut result_list, scr_txt),
+            _ =>  &result_list
+        }.clone())
+}
+
+fn display_prompt(result_list: &ResponseList) -> SkimOutput {
+    let header_text = "Search Results\nCtrl-P : toggle preview\nCtrl-T: show thumbnail";
+    let binds: Vec<&str> = vec![
+        "esc:execute(exit 0)+abort",
+        "ctrl-p:toggle-preview",
+        "ctrl-t:accept",
+    ];
+    let options = SkimOptionsBuilder::default()
+        .height(Some("100%"))
+        .bind(binds)
+        .preview(Some(""))
+        .preview_window(Some("wrap"))
+        .header(Some(&header_text))
+        .reverse(true)
+        .build()
+        .unwrap();
+    let (tx_item, rx_item): (SkimItemSender, SkimItemReceiver) = unbounded();
+    for item in &result_list.search_list {
+        let _ = tx_item.send(Arc::new(item.clone()));
     }
-    let resp: String = get_yt_data(search_url, show_load).await?;
-    let doc = Document::from_read(resp.as_bytes()).unwrap();
-    for node in doc.find(Name("script")) {
-        if node.text().find("var ytInitialData =") != None {
-            let node_text = node.text();
-            let scr_txt = get_json(&node_text).unwrap();
-            let json: serde_json::Value =
-                serde_json::from_str(scr_txt).unwrap();
-            let search_contents: &Vec<serde_json::Value> = json["contents"]["twoColumnSearchResultsRenderer"]["primaryContents"]["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]["contents"].as_array().unwrap();
-            for i in 0..search_contents.len() {
-                if search_contents[i].get("videoRenderer") != None {
-                    let vid_id = search_contents[i]["videoRenderer"]["videoId"].as_str().unwrap();
-                    let vid_title = search_contents[i]["videoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
-                    result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
-                } else if search_contents[i].get("playlistRenderer") != None {
-                    let playlist_id = search_contents[i]["playlistRenderer"]["playlistId"].as_str().unwrap();
-                    let playlist_title = search_contents[i]["playlistRenderer"]["title"]["simpleText"].as_str().unwrap();
-                   result_list.add_item(Item{id: playlist_id.to_string(), name: playlist_title.to_string(), item_type: "playlist".to_string()});
-                } else if search_contents[i].get("channelRenderer") != None {
-                    let channel_id = search_contents[i]["channelRenderer"]["channelId"].as_str().unwrap();
-                    let channel_title = search_contents[i]["channelRenderer"]["title"]["simpleText"].as_str().unwrap();
-                    result_list.add_item(Item{id: channel_id.to_string(), name: channel_title.to_string(), item_type: "channel".to_string()});
+    drop(tx_item);
+    let output = Skim::run_with(&options, Some(rx_item)).unwrap();
+    output
+}
+
+fn get_output_search_list(output: &SkimOutput) -> Vec<ListItem> {
+    output.selected_items
+        .iter()
+        .map(|selected_item| {
+            (**selected_item)
+                .as_any()
+                .downcast_ref::<SearchResult>()
+                .unwrap()
+                .search_data
+                .to_owned()
+        })
+        .collect::<Vec<ListItem>>()
+}
+
+fn launch_feh(id: String) {
+    let _cmd = Command::new("feh")
+        .arg("-B").arg("Black")
+        .arg("--no-fehbg")
+        .arg("-Z")
+        .arg(format!("https://i.ytimg.com/vi/{}/mqdefault.jpg", id))
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("feh command failed to start");
+}
+
+async fn launch_mpv(video_link: String, video_title: String) {
+    log::info!("Playing video {}", video_title);
+    let mut cmd = Command::new("mpv");
+    cmd.arg(video_link)
+        .arg("--hwdec=vaapi")
+        .arg("--ytdl-format=bestvideo[ext=mp4][height<=?720]+bestaudio[ext=m4a]");
+    if !log::log_enabled!(log::Level::Info) { cmd.stdout(Stdio::null()); }
+    let mut mpv = cmd.spawn().expect("cannot start mpv");
+    let status = mpv.wait().await.expect("Exit mpv failed");
+    log::info!("the command exited with {}", status);
+    if !log::log_enabled!(log::Level::Info) {std::io::stdout().flush().expect("could not flush")}
+}
+
+async fn play_video(id: String, name: String, key: Key) {
+    match key {
+        Key::Enter => launch_mpv("https://youtu.be/".to_string() + id.as_str(), name.clone()).await,
+        Key::Ctrl('t') => launch_feh(id.clone()),
+        _ => (),
+    }
+}
+
+async fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
+    let results = match yt_search(query, search_type, search_mod).await {
+        Ok(k) => { k },
+        Err(e) => { eprintln!("{}",e); ResponseList::new() },
+    };
+    loop {
+        let mut output = display_prompt(&results);
+        if output.is_abort { break }
+        let out_item_o = get_output_search_list(&output);
+        let out_item = out_item_o.get(0).unwrap().clone();
+        use ListEnum::*;
+        match out_item.ex { 
+            Video(_) => { play_video( out_item.id, out_item.name, output.final_key).await },
+            Playlist(_) | Channel(_) => {
+                let results = yt_search(out_item.id.to_owned(), out_item.clone().get_type_char(), None)
+                    .await
+                    .expect("could not get playlist videos");
+                loop {
+                    output = display_prompt(&results);
+                    if output.is_abort { break }
+                    match get_output_search_list(&output).get(0).unwrap().clone().ex {
+                        Video(_) => { play_video(out_item.id.clone(), out_item.name.clone(), output.final_key).await }
+                        _ => (),
+                    };
                 }
-            }
+
+            },
+                
         }
     }
-    Ok(result_list)
 }
 
-async fn get_channel_videos(channel_id: String, show_load: bool) -> Result<ResponseList, reqwest::Error> {
-    let mut result_list = ResponseList::new();
-    let resp = get_yt_data(["https://www.youtube.com/channel/", &channel_id, "/videos"].concat(), show_load).await?;
-    let doc = Document::from_read(resp.as_bytes()).unwrap();
-    for node in doc.find(Name("script")) {
-        if node.text().find("var ytInitialData =") != None {
-            let node_text = node.text();
-            let scr_txt = get_json(&node_text).unwrap();
-            let json: serde_json::Value =
-                serde_json::from_str(scr_txt).unwrap();
-            let search_contents: &Vec<serde_json::Value> = json["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][1]["tabRenderer"]["content"]["sectionListRenderer"]["contents"][0]["itemSectionRenderer"]["contents"][0]["gridRenderer"]["items"].as_array().unwrap();
-            for i in 0..search_contents.len() {
-                if search_contents[i].get("gridVideoRenderer") != None {
-                    let vid_id = search_contents[i]["gridVideoRenderer"]["videoId"].as_str().unwrap();
-                    let vid_title = search_contents[i]["gridVideoRenderer"]["title"]["runs"][0]["text"].as_str().unwrap();
-                    result_list.add_item(Item{id: vid_id.to_string(),name: vid_title.to_string(), item_type: "video".to_string()});
-                }
-            }
-        }
-    }
-   Ok(result_list)
-}
 
-fn display_prompt(prompt: ResponseList, is_gui: bool) -> Vec<String> {
-    let mut abort: bool = false;
-    let mut selected_name= String::new();
-    if is_gui {
-        let mut dmenu = Command::new("dmenu").arg("-i").arg("-l").arg("20").stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().unwrap();
-        dmenu.stdin.as_mut()
-            .ok_or("Child process stdin has not been captured!").unwrap().write_all(prompt.item_text.as_bytes()).unwrap();
-        let output = dmenu.wait_with_output().unwrap();
-        if output.status.success() {
-            selected_name = String::from_utf8(output.clone().stdout).unwrap();
-            selected_name = selected_name.replace("\n","").replace("\r", "");
-            if selected_name.is_empty() { abort = true; }
-        } else { abort = true }
-    } else {
-        let binds: Vec<&str> = vec!["esc:execute(exit 0)+abort"];
-        let options = SkimOptionsBuilder::default()
-            .height(Some("50%")).bind(binds)
-            .build()
-            .unwrap();
-        let item_reader = SkimItemReader::default();
-        let items = item_reader.of_bufread(io::Cursor::new(prompt.item_text));
-        let output = Skim::run_with(&options, Some(items)).unwrap();
-        for items in output.selected_items.iter() { selected_name= items.output().to_string(); }
-        if output.is_abort { abort = true; }
-    }
-    let mut selected_type = String::new();
-    let mut selected_id = String::new();
-    if abort { return vec![selected_id, selected_type, selected_name, "aborted".to_string()] }
-    for i in 0..prompt.item_list.len() {
-        let item = prompt.item_list.get(i).unwrap();
-        if item.name == selected_name{
-            selected_id = item.id.clone();
-            selected_type = item.item_type.clone();
-        }
-    }
-    vec![selected_id, selected_type, selected_name]
-}
-
-fn launch_mpv(video_link: String, video_title: String) {
-    println!("Playing video {}", video_title);
-    let _output = Command::new("mpv")
-            .arg(video_link)
-            .arg("--hwdec=vaapi")
-            .arg("--ytdl-format=bestvideo[ext=mp4][height<=?720]+bestaudio[ext=m4a]")
-            .output().expect("failed to launch mpv");
+#[derive(StructOpt, Debug)]
+#[structopt(name = "ryts", no_version)]
+struct Opts {
+    #[structopt(subcommand)]
+    commands: Subcommands,
 }
 
 #[derive(StructOpt, Debug)]
-#[structopt(name="ryts",group = ArgGroup::with_name("search").conflicts_with("subscriptions"))]
-struct Opt {
-    #[structopt(name="channel", short="c", help="search for channel", group="search")]
+#[structopt(name = "subcommands", about = "subcommands list")]
+enum Subcommands {
+    #[structopt(name = "se", group = ArgGroup::with_name("search").conflicts_with_all(&["subscriptions"]))]
+    Se(SeOpts),
+    #[structopt(name = "id", group = ArgGroup::with_name("search"))]
+    Id(IdOpts),
+    #[structopt(name = "ch", group = ArgGroup::with_name("search"))]
+    Ch(ChOpts),
+    #[structopt(name = "pl")]
+    Pl(PlOpts),
+}
+
+#[derive(StructOpt, Debug)]
+struct SeOpts {
+    #[structopt(
+        name = "channel",
+        short = "c",
+        help = "search for channel",
+        group = "search"
+    )]
     channel: bool,
-    #[structopt(name="playlist", short="p", help="search for playlist", group="search")]
+    #[structopt(
+        name = "playlist",
+        short = "p",
+        help = "search for playlist",
+        group = "search"
+    )]
     playlist: bool,
-    #[structopt(name="video", short="v", help="search for video", group="search")]
+    #[structopt(
+        name = "video",
+        short = "v",
+        help = "search for video",
+        group = "search"
+    )]
     video: bool,
-    #[structopt(name="subscriptions", short="s", help="search for video")]
+    #[structopt(name = "subscriptions", short = "s", help = "get subscription list")]
     subscription: bool,
-    #[structopt(name="query",required(true))]
-    query: String,
-    #[structopt(name="gui", short="g", help="prompt with dmenu")]
-    is_gui: bool,
-    #[structopt(name="by id", short="i", help="get by id")]
-    by_id: bool,
-    #[structopt(name="no prompt", short="n", help="don\'t show prompt just list results")]
-    no_prompt: bool
+    #[structopt(name = "query", required_unless("subscriptions"))]
+    query: Option<String>,
+}
+
+#[derive(StructOpt, Debug)]
+struct IdOpts {
+    #[structopt(
+        name = "channel",
+        short = "c",
+        help = "get channel link",
+        group = "search"
+    )]
+    channel: bool,
+    #[structopt(
+        name = "playlist",
+        short = "p",
+        help = "get playlist link",
+        group = "search"
+    )]
+    playlist: bool,
+    #[structopt(name = "video", short = "v", help = "get video link", group = "search")]
+    video: bool,
+    #[structopt(name = "thumbnails", short = "t", help = "get thumbnail by id")]
+    thumbnail: bool,
+    #[structopt(name = "id", required = true)]
+    id: String,
+}
+
+#[derive(StructOpt, Debug)]
+struct ChOpts {
+    #[structopt(
+        name = "playlist",
+        short = "p",
+        help = "get channel playlist",
+        group = "search"
+    )]
+    playlist: bool,
+    #[structopt(
+        name = "video",
+        short = "v",
+        help = "get channel video",
+        group = "search"
+    )]
+    video: bool,
+    #[structopt(name = "id", required = true)]
+    id: String,
+}
+
+#[derive(StructOpt, Debug)]
+struct PlOpts {
+    #[structopt(name = "id", required = true)]
+    id: String,
+}
+
+async fn handle_subcommand(opt: Opts) {
+    match opt.commands {
+        Subcommands::Se(cfg) => {
+            let search_mod= match cfg {
+                SeOpts{ video: true, .. } => { 'v' },
+                SeOpts{ playlist: true, .. } => { 'p' },
+                SeOpts{ channel: true, .. } => { 'c' },
+                _ => { 's' }
+            };
+            // log::info!("Searching for {}...", cfg.query.clone().unwrap_or_default());
+            let query = sanitize_query(cfg.query.unwrap()).to_string();
+            prompt_loop(query, 'g' , Some(search_mod)).await;
+        }
+        Subcommands::Id(cfg) => {
+            let id = cfg.id.trim().to_string();
+            let search_mod =  match cfg {
+                IdOpts{ video: true, .. } => { 'v' },
+                IdOpts{ playlist: true, .. } => { 'p' },
+                IdOpts{ channel: true, .. } => { 'c' },
+                _ => { 's' }
+            };
+            let mut link;
+            match search_mod {
+                'c' => { link = format!("https://www.youtube.com/channel/{}/videos", &id) },
+                'p' => { link = format!("https://youtube.com/playlist?list={}", &id) },
+                _ => {
+                    link = ["https://www.youtu.be/", &id].concat().to_string();
+                    if cfg.thumbnail { link = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", &id) }
+                },
+            }
+            println!("{}", link);
+            exit(0);
+        }
+        Subcommands::Ch(cfg) => {
+            if cfg.video {
+                let search_result = yt_search(cfg.id, 'c', None)
+                    .await
+                    .expect("could not get channel videos");
+                for item in search_result.search_list { println!("{}", item.search_text); }
+            }
+        }
+        Subcommands::Pl(cfg) => {
+            let search_result = yt_search(cfg.id, 'p', None)
+                .await
+                .expect("could not get playlist videos");
+            for item in search_result.search_list { println!("{}", item.search_text); }
+        }
+    }
 }
 
 #[tokio::main]
 async fn main() {
-    let opt = Opt::from_args();
-    // Get Args
-    let mut search_mod = 's';
-    if opt.channel { search_mod = 'c' }
-    if opt.video { search_mod = 'v' }
-    if opt.playlist { search_mod = 'p' }
-    let show_load = !(opt.is_gui || opt.no_prompt);
-    // Sanitize and search
-    let query = &sanitize_query(opt.query).to_string();
-    let search_result = search_for_generic(query, search_mod, show_load ).await.expect("cannot fetch yt");
-    if opt.no_prompt { println!("{}", search_result.item_text); exit(0) }
-    // Display prompt and get selection
-    loop {
-        let prompt_res: Vec<String> = display_prompt(search_result.clone(), opt.is_gui);
-        if prompt_res.get(3).is_some() { exit(0) }
-        let selected_id: String = prompt_res.get(0).expect("could not get selection id").clone();
-        let selected_type: String = prompt_res.get(1).expect("could not get selection type").clone();
-        match selected_type.clone().as_str() {
-            "playlist" => { launch_mpv("https://youtube.com/playlist?list=".to_string()+ selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
-            "video" => { launch_mpv("https://youtu.be/".to_string() + selected_id.as_str(), prompt_res.get(2).unwrap().clone()); },
-            "channel" => {
-                let channel_videos = get_channel_videos(selected_id, show_load).await.expect("cannot get channel videos");
-                loop {
-                    let prompt = display_prompt(channel_videos.clone(), opt.is_gui);
-                    if prompt.get(3).is_some() { break }
-                    launch_mpv("https://youtu.be/".to_string() + prompt.get(0).unwrap(), prompt.get(2).unwrap().clone());
-                }
-            },
-            _ => {
-                println!("error getting search item type: {}", selected_type);
-                exit(1);
-            }
-        }
-    }
+    let env = Env::default()
+        .filter_or("MY_LOG_LEVEL", "Info")
+        .write_style_or("MY_LOG_STYLE", "always");
+    env_logger::init_from_env(env);
+    let opt = Opts::from_args();
+    handle_subcommand(opt).await;
 }
+
+#[cfg(test)]
+mod tests {
+    use select::{document::Document, predicate::Name};
+    use crate::yt_json::{strip_html_json,parse_generic};
+    use crate::search_item::{ListEnum,ResponseList};
+    use crate::yt_search;
+
+    #[tokio::test]
+    async fn test_playlist_empty_query() {
+        let playlist_videos = yt_search("".to_string(), 'p', None).await.expect("could not fetch");
+        assert_eq!(playlist_videos.search_list.is_empty(), true);
+    }
+
+    // #[test]
+    // fn test_parse_generic() {
+    //     let contents = std::fs::read_to_string("./testNoFormat.html").expect("Something went wrong reading the file");
+    //     let mut search_result = ResponseList::new();
+    //     let mut scr_txt = String::new();
+    //     let doc = Document::from_read(contents.as_bytes()).unwrap();
+    //     for node in doc.find(Name("script")) {
+    //         let node_text: String;
+    //         node_text = node.text();
+    //         if let Some(sc) = strip_html_json(&node_text) {
+    //             scr_txt = sc.to_string();
+    //         }
+    //     }
+    //     search_result = parse_generic(&mut search_result, scr_txt).clone();
+    //     let test_list = vec!["2zOqMK9fXIw","GO2F-e_D-bo","r0XoAoXo4tM", "FcUvf1R-fVY", "Vj5ZMcIHOy4", "WPX-yemalxA", "w8N4e7cfn-M","kPUAQd0NEv4", "iqdZIs7jGX8", "evXO9V0UQX4", "c0EufiNQH0c", "QVo_QIdOwQU", "OUbRIeGjeqU", "my1lUZ1M1b0", "Ig9Es7ri-Pc",  "jn_kFQIxNH8"];
+    //
+    //     for item in search_result.search_list {
+    //         match item.search_data.ex {
+    //             ListEnum::Video(_) => { assert!(test_list.contains(&item.search_data.id.as_str())) }
+    //             _ => {},
+    //         }
+    //     }
+    // }
+}
+
