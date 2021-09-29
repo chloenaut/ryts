@@ -16,3 +16,11 @@ dyn-clone = "1.0.4"
 structopt = "0.3.21"
 indicatif = "0.15.0"
 select = "0.5"
+tui = {version = "0.14", default-features = false, features = ['crossterm']}
+crossterm = "0.19.0"
+[lib]
+name = "ryts"
+path = "src/lib.rs"
+[[bin]]
+name= "rytsCLTool"
+path= "src/bin/rytsCLTool.rs"
