@@ -2,7 +2,7 @@
 use regex::Regex;
 use crate::search_item::*;
 use select::{ document::Document, predicate::Name };
-pub fn strip_html_json<'a>(text: &'a str) -> Option<&'a str> {
+pub fn strip_html_json(text: &str) -> Option<&str> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"(?:var ytInitialData = )(?P<json>.*)(?:;)").unwrap();
     }
