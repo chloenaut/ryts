@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 /target
 Cargo.lock
 test.html
@@ -7,3 +8,14 @@ perf.*
 flame.svg
 /benchStuff
 /.idea
+=======
+/target
+Cargo.lock
+test.html
+testNoFormat.html
+perf.*
+*.pl
+flame.svg
+/benchStuff
+/.idea
+>>>>>>> 71f0b1c2a06a551c329c2bb57ccce1bfa64323f9

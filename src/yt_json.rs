@@ -4,7 +4,7 @@ use crate::search_item::*;
 use select::{ document::Document, predicate::Name };
 pub fn strip_html_json(text: &str) -> Option<&str> {
     lazy_static! {
-        static ref RE: Regex = Regex::new(r"(?:var ytInitialData = )(?P<json>.*)(?:;)").unwrap();
+        static ref RE: Regex = Regex::new(r"(?:var a = )(?P<json>.*)(?:;)").unwrap();
     }
     RE.captures(text)
         .and_then(|cap| cap.name("json").as_ref()
@@ -169,3 +169,4 @@ pub fn parse_suggestions(result_list: &mut ResponseList, scr_txt: String) -> &Re
     } 
     result_list
 }
+
