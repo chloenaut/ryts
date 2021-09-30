@@ -2,7 +2,7 @@
 use regex::Regex;
 use crate::search_item::*;
 use select::{ document::Document, predicate::Name };
-pub fn strip_html_json<'a>(text: &'a str) -> Option<&'a str> {
+pub fn strip_html_json(text: &str) -> Option<&str> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"(?:var ytInitialData = )(?P<json>.*)(?:;)").unwrap();
     }
@@ -28,6 +28,7 @@ pub async fn get_yt_json(search_url: String) -> String {
     let resp_str_f = get_yt_html(search_url).await;
     let resp_str = resp_str_f.unwrap_or_default();
     if resp_str.is_empty() { return scr_txt }
+    // println!("{}", strip_html_json(&scr_txt).unwrap().to_string());
     let doc = Document::from_read(resp_str.as_bytes()).unwrap();
     let mut node_text: String;
     for node in doc.find(Name("script")) {
@@ -142,5 +143,29 @@ pub fn parse_channel(result_list: &mut ResponseList, scr_txt: String) -> &Respon
             pb.inc(1);
         }
     }
+    result_list
+}
+
+pub fn parse_suggestions(result_list: &mut ResponseList, scr_txt: String) -> &ResponseList {
+    let json: serde_json::Value = serde_json::from_str(&scr_txt).unwrap_or_default();
+    let empty_ret = &Vec::<serde_json::Value>::new();
+    let search_contents: &Vec<serde_json::Value> = json["contents"]
+        ["twoColumnWatchNextResults"]["secondaryResults"]["secondaryResults"]["results"].as_array().unwrap_or(empty_ret);
+    for i in 0..search_contents.len() {
+        if search_contents[i].get("compactVideoRenderer") != None {
+            let vid = search_contents[i]["compactVideoRenderer"].clone();
+            let id = vid["videoId"].as_str().unwrap_or_default().to_string();
+            result_list.add_item(&ListItem {
+                    id: id.clone(),
+                    name: vid["title"]["simpleText"].as_str().unwrap_or_default().to_string(),
+                    ex: ListEnum::Video(VideoData {
+                        length: vid["lengthText"]["simpleText"].as_str().unwrap_or_default().to_string(),
+                        channel_name: vid["longBylineText"]["runs"][0]["text"]
+                            .as_str().unwrap_or_default().to_string(),
+                        thumbnail:"".to_string() 
+                })
+            });
+        }
+    } 
     result_list
 }

@@ -2,14 +2,16 @@
 extern crate lazy_static;
 use env_logger::Env;
 use crate::search_item::{ListItem, ListEnum, SearchResult, ResponseList};
-use crate::yt_json::{ parse_generic, parse_playlist, parse_channel, get_yt_json };
-use std::{borrow::Cow, io::Write, process::{exit, Stdio}};
+use crate::yt_json::{ parse_generic, parse_playlist, parse_channel, get_yt_json, parse_suggestions };
+use std::{borrow::Cow, io::Write, process::{exit, Stdio}, env};
 use structopt::{clap::ArgGroup, StructOpt};
 use tokio::process::Command;
 extern crate skim;
+use async_recursion::async_recursion;
 use skim::prelude::*;
 mod yt_json;
 mod search_item;
+mod search;
 
 pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
     let input = input.into();
@@ -47,7 +49,7 @@ pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
 // }
 
 //TODO optimize thumbnail shennanigans
-fn get_ansi_thumb(id: String) -> String {
+fn _get_ansi_thumb(id: String) -> String {
     let cmd = std::process::Command::new("pixterm")
         .arg("-tc").arg("60")
         .arg("-tr").arg("20")
@@ -55,8 +57,6 @@ fn get_ansi_thumb(id: String) -> String {
         .output().expect("could not get thumb");
     String::from_utf8_lossy(&cmd.stdout).to_string()
 }
-
-
 
 fn get_search_mod(search_mod: char) -> String {
     match search_mod {
@@ -71,13 +71,14 @@ fn get_search_mod(search_mod: char) -> String {
 async fn yt_search(
     query: String,
     search_type: char,
-    search_mod: Option<char>
+    search_mod: Option<char>,
 ) -> Result<ResponseList, reqwest::Error> {
         let mut result_list = ResponseList::new();
-    let search_url = match search_type {
+        let search_url = match search_type {
         'g' => { format!("https://www.youtube.com/results?search_query={}{}", &query, get_search_mod(search_mod.unwrap_or_default()))},
         'p' => { format!("https://www.youtube.com/playlist?list={}", &query) },
-        'c' => { format!("https://www.youtube.com/channel/{}/videos",&query) }
+        'c' => { format!("https://www.youtube.com/channel/{}/videos",&query) },
+	    's' => { format!("https://www.youtube.com/watch?v={}", &query)},
         _ => {format!("https://www.youtube.com/results?search_query={}", &query)}
     };
     //search for specific type
@@ -89,6 +90,7 @@ async fn yt_search(
             'g' => parse_generic(&mut result_list, scr_txt),
             'p' => parse_playlist(&mut result_list, scr_txt),
             'c' => parse_channel(&mut result_list, scr_txt),
+            's' => parse_suggestions(&mut result_list, scr_txt),
             _ =>  &result_list
         }.clone())
 }
@@ -99,6 +101,7 @@ fn display_prompt(result_list: &ResponseList) -> SkimOutput {
         "esc:execute(exit 0)+abort",
         "ctrl-p:toggle-preview",
         "ctrl-t:accept",
+        "ctrl-space:accept"
     ];
     let options = SkimOptionsBuilder::default()
         .height(Some("100%"))
@@ -143,23 +146,40 @@ fn launch_feh(id: String) {
         .expect("feh command failed to start");
 }
 
-async fn launch_mpv(video_link: String, video_title: String) {
+fn launch_mpv(video_link: String, video_title: String) {
+    let hwdec = env::var("HWDEC_OPT").unwrap_or("--hwdec=vaapi".to_string());
+    let mpv_command = env::var("MPV_DIR").unwrap_or("mpv".to_string());
     log::info!("Playing video {}", video_title);
-    let mut cmd = Command::new("mpv");
+    let mut cmd = std::process::Command::new(mpv_command);
     cmd.arg(video_link)
-        .arg("--hwdec=vaapi")
+        .arg(hwdec)
         .arg("--ytdl-format=bestvideo[ext=mp4][height<=?720]+bestaudio[ext=m4a]");
     if !log::log_enabled!(log::Level::Info) { cmd.stdout(Stdio::null()); }
     let mut mpv = cmd.spawn().expect("cannot start mpv");
-    let status = mpv.wait().await.expect("Exit mpv failed");
+    let status = mpv.wait().expect("could not get exit status of mpv");//.await.expect("Exit mpv failed");
     log::info!("the command exited with {}", status);
     if !log::log_enabled!(log::Level::Info) {std::io::stdout().flush().expect("could not flush")}
 }
 
+#[async_recursion]
 async fn play_video(id: String, name: String, key: Key) {
     match key {
-        Key::Enter => launch_mpv("https://youtu.be/".to_string() + id.as_str(), name.clone()).await,
+        Key::Enter => { launch_mpv("https://youtu.be/".to_string() + id.as_str(), name.clone()); },
         Key::Ctrl('t') => launch_feh(id.clone()),
+        Key::Ctrl(' ') => {
+            let results = yt_search( id.to_owned(), 's', None)
+                    .await
+                    .expect("could not get playlist videos");
+                loop {
+                    let output = display_prompt(&results);
+                    if output.is_abort { break }
+                    let out_item = get_output_search_list(&output).get(0).unwrap().clone();
+                    match get_output_search_list(&output).get(0).unwrap().clone().ex {
+                        ListEnum::Video(_) => { play_video( out_item.id.clone(), out_item.name.clone(), output.final_key).await }
+                        _ => (),
+                    };
+                }
+        },
         _ => (),
     }
 }
@@ -176,7 +196,7 @@ async fn prompt_loop(query: String, search_type: char, search_mod: Option<char>)
         let out_item = out_item_o.get(0).unwrap().clone();
         use ListEnum::*;
         match out_item.ex { 
-            Video(_) => { play_video( out_item.id, out_item.name, output.final_key).await },
+            Video(_) => { play_video( out_item.id, out_item.name, output.final_key).await; },
             Playlist(_) | Channel(_) => {
                 let results = yt_search(out_item.id.to_owned(), out_item.clone().get_type_char(), None)
                     .await
@@ -185,13 +205,12 @@ async fn prompt_loop(query: String, search_type: char, search_mod: Option<char>)
                     output = display_prompt(&results);
                     if output.is_abort { break }
                     match get_output_search_list(&output).get(0).unwrap().clone().ex {
-                        Video(_) => { play_video(out_item.id.clone(), out_item.name.clone(), output.final_key).await }
+                        Video(_) => { play_video(out_item.id.clone(), out_item.name.clone(), output.final_key).await}
                         _ => (),
                     };
                 }
 
             },
-                
         }
     }
 }
@@ -303,7 +322,7 @@ async fn handle_subcommand(opt: Opts) {
                 SeOpts{ video: true, .. } => { 'v' },
                 SeOpts{ playlist: true, .. } => { 'p' },
                 SeOpts{ channel: true, .. } => { 'c' },
-                _ => { 's' }
+                _ => { 'n' }
             };
             // log::info!("Searching for {}...", cfg.query.clone().unwrap_or_default());
             let query = sanitize_query(cfg.query.unwrap()).to_string();
@@ -315,7 +334,7 @@ async fn handle_subcommand(opt: Opts) {
                 IdOpts{ video: true, .. } => { 'v' },
                 IdOpts{ playlist: true, .. } => { 'p' },
                 IdOpts{ channel: true, .. } => { 'c' },
-                _ => { 's' }
+                _ => { 'n' }
             };
             let mut link;
             match search_mod {
@@ -358,9 +377,9 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use select::{document::Document, predicate::Name};
-    use crate::yt_json::{strip_html_json,parse_generic};
-    use crate::search_item::{ListEnum,ResponseList};
+    // use select::{document::Document, predicate::Name};
+    // use crate::yt_json::{strip_html_json,parse_generic};
+    // use crate::search_item::{ListEnum,ResponseList};
     use crate::yt_search;
 
     #[tokio::test]
@@ -369,28 +388,28 @@ mod tests {
         assert_eq!(playlist_videos.search_list.is_empty(), true);
     }
 
-    #[test]
-    fn test_parse_generic() {
-        let contents = std::fs::read_to_string("./testNoFormat.html").expect("Something went wrong reading the file");
-        let mut search_result = ResponseList::new();
-        let mut scr_txt = String::new();
-        let doc = Document::from_read(contents.as_bytes()).unwrap();
-        for node in doc.find(Name("script")) {
-            let node_text: String;
-            node_text = node.text();
-            if let Some(sc) = strip_html_json(&node_text) {
-                scr_txt = sc.to_string();
-            }
-        }
-        search_result = parse_generic(&mut search_result, scr_txt).clone();
-        let test_list = vec!["2zOqMK9fXIw","GO2F-e_D-bo","r0XoAoXo4tM", "FcUvf1R-fVY", "Vj5ZMcIHOy4", "WPX-yemalxA", "w8N4e7cfn-M","kPUAQd0NEv4", "iqdZIs7jGX8", "evXO9V0UQX4", "c0EufiNQH0c", "QVo_QIdOwQU", "OUbRIeGjeqU", "my1lUZ1M1b0", "Ig9Es7ri-Pc",  "jn_kFQIxNH8"];
-
-        for item in search_result.search_list {
-            match item.search_data.ex {
-                ListEnum::Video(_) => { assert!(test_list.contains(&item.search_data.id.as_str())) }
-                _ => {},
-            }
-        }
-    }
+    // #[test]
+    // fn test_parse_generic() {
+    //     let contents = std::fs::read_to_string("./testNoFormat.html").expect("Something went wrong reading the file");
+    //     let mut search_result = ResponseList::new();
+    //     let mut scr_txt = String::new();
+    //     let doc = Document::from_read(contents.as_bytes()).unwrap();
+    //     for node in doc.find(Name("script")) {
+    //         let node_text: String;
+    //         node_text = node.text();
+    //         if let Some(sc) = strip_html_json(&node_text) {
+    //             scr_txt = sc.to_string();
+    //         }
+    //     }
+    //     search_result = parse_generic(&mut search_result, scr_txt).clone();
+    //     let test_list = vec!["2zOqMK9fXIw","GO2F-e_D-bo","r0XoAoXo4tM", "FcUvf1R-fVY", "Vj5ZMcIHOy4", "WPX-yemalxA", "w8N4e7cfn-M","kPUAQd0NEv4", "iqdZIs7jGX8", "evXO9V0UQX4", "c0EufiNQH0c", "QVo_QIdOwQU", "OUbRIeGjeqU", "my1lUZ1M1b0", "Ig9Es7ri-Pc",  "jn_kFQIxNH8"];
+    //
+    //     for item in search_result.search_list {
+    //         match item.search_data.ex {
+    //             ListEnum::Video(_) => { assert!(test_list.contains(&item.search_data.id.as_str())) }
+    //             _ => {},
+    //         }
+    //     }
+    // }
 }
 

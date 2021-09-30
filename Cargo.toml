@@ -21,7 +21,9 @@ async-process = "1.2.0"
 unicode-truncate= "0.2.0"
 env_logger="*"
 log="*"
+async-recursion = "0.2"
 tuikit = "*"
+
 # [profile.release]
 # debug = true
 # lto = false

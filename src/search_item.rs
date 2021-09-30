@@ -43,7 +43,7 @@ impl ListItem {
             Channel(_) => 'c'
         }
     }
-    fn new() -> ListItem {
+    fn _new() -> ListItem {
         ListItem {
             id: String::new(),
             name: String::new(),
