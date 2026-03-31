@@ -2,26 +2,26 @@
 name = "ryts"
 version = "0.1.0"
 authors = ["chlo"]
-edition = "2018"
+edition="2024"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-reqwest = { version = "0.11", features = ["json", "blocking"] }
-regex = "1.4.5"
-lazy_static = "1.4.0"
+reqwest = { version = "*", features = ["json", "blocking"] }
+regex = "*"
+image = "0.25.10"
+lazy_static = "*"
 rayon="*"
 crossbeam="*"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-clap = "2.33"
-structopt = "0.3.21"
-indicatif = "0.16.2"
-select = "0.5"
+serde = { version = "*", features = ["derive"] }
+serde_json = "*"
+clap = "*"
+structopt = "*"
+indicatif = "*"
+select = "*"
 skim = "*"
-unicode-truncate= "0.2.0"
+unicode-truncate= "*"
 env_logger="*"
 log="*"
 bytes="*"
-image="*"
 
 [profile.release]
 # debug = true
