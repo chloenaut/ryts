@@ -1,72 +1,17 @@
 #[macro_use]
 extern crate lazy_static;
-use crate::search_item::{ListEnum, ListItem, ResponseList, SearchResult};
-use crate::yt_json::{
-    get_yt_json, parse_channel, parse_generic, parse_playlist, parse_suggestions,
-};
 use env_logger::Env;
-type Error = Box<dyn std::error::Error>;
-use std::process::exit;
-use structopt::{clap::ArgGroup, StructOpt};
+use indicatif::ProgressBar;
+use indicatif::ProgressStyle;
+use structopt::{StructOpt, clap::ArgGroup};
 extern crate skim;
-use skim::prelude::*;
-
+mod ryts_util;
+use crate::ryts_util::*;
 mod search;
+use crate::search::*;
 mod search_item;
-mod yt_json;
-
-// Apply different search modifier to query string
-fn get_search_mod(search_mod: char) -> String {
-    match search_mod {
-        'c' => "&sp=EgIQAg%253D%253D",
-        'p' => "&sp=EgIQAw%253D%253D",
-        'v' => "&sp=EgIQAQ%253D%253D",
-        _ => "",
-    }
-    .to_string()
-}
-
-fn yt_search(
-    query: String,
-    search_type: char,
-    search_mod: Option<char>,
-) -> Result<ResponseList, Error> {
-    let mut result_list = ResponseList::new();
-    let search_url = match search_type {
-        'g' => {
-            format!(
-                "https://www.youtube.com/results?search_query={}{}",
-                &query,
-                get_search_mod(search_mod.unwrap_or_default())
-            )
-        }
-        'p' => {
-            format!("https://www.youtube.com/playlist?list={}", &query)
-        }
-        'c' => {
-            format!("https://www.youtube.com/channel/{}/videos", &query)
-        }
-        's' => {
-            format!("https://www.youtube.com/watch?v={}", &query)
-        }
-        _ => {
-            format!("https://www.youtube.com/results?search_query={}", &query)
-        }
-    };
-
-    let scr_txt = get_yt_json(search_url);
-    if scr_txt.is_empty() {
-        return Err("Search returned Empty")?;
-    }
-    return Ok(match search_type {
-        'g' => parse_generic(&mut result_list, scr_txt),
-        'p' => parse_playlist(&mut result_list, scr_txt),
-        'c' => parse_channel(&mut result_list, scr_txt),
-        's' => parse_suggestions(&mut result_list, scr_txt),
-        _ => &result_list,
-    }
-    .clone());
-}
+use crate::search_item::*;
+use skim::prelude::*;
 
 fn display_prompt<'a>(mut _result_list: &'a ResponseList) -> SkimOutput {
     let header_text = "Search Results\nCtrl-P : toggle preview\nCtrl-T: show thumbnail";
@@ -114,29 +59,25 @@ fn get_output_search_list(output: &SkimOutput) -> Vec<ListItem> {
 fn handle_video_item_actions<'a>(id: String, name: String, key: Key) {
     match key {
         Key::Enter => {
-            ryts::play_video("https://youtu.be/".to_string() + id.as_str(), name.clone());
+            ryts_util::play_video("https://youtu.be/".to_string() + id.as_str(), name.clone());
         }
-        Key::Ctrl('t') => ryts::show_thumbnail(id.clone()),
+        Key::Ctrl('t') => show_thumbnail(id.clone()),
         _ => (),
     }
 }
 
 fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
-    let loading_icon: indicatif::ProgressBar = indicatif::ProgressBar::new_spinner();
+    let loading_icon = ProgressBar::new_spinner();
     loading_icon.set_style(
-        indicatif::ProgressStyle::default_bar()
+        ProgressStyle::default_bar()
             .template("{spinner} {msg}")
-            .tick_strings(&[".   ", "..  ", "... ", "...."]),
+            .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
     );
-    loading_icon.set_message("fetching youtube data");
-    let results = match yt_search(query, search_type, search_mod) {
-        Ok(k) => k,
-        // Fix Error Handling
-        Err(e) => {
-            eprintln!("{}", e);
-            ResponseList::new()
-        }
-    };
+    loading_icon.set_message("Fetching Youtube Data");
+    loading_icon.enable_steady_tick(120);
+    // Search for query
+    let results = yt_search(query, search_type, search_mod).expect("Could not search");
+
     loading_icon.finish_and_clear();
     loop {
         let mut output = display_prompt(&results);
@@ -187,8 +128,8 @@ struct Opts {
 enum Subcommands {
     #[structopt(name = "se", group = ArgGroup::with_name("search").conflicts_with_all(&["subscriptions"]))]
     Search(SearchOpts),
-    #[structopt(name = "id", group = ArgGroup::with_name("search"))]
-    Id(IdOpts),
+    // #[structopt(name = "id", group = ArgGroup::with_name("search"))]
+    // Id(IdOpts),
     #[structopt(name = "ch", group = ArgGroup::with_name("search"))]
     Channel(ChannelOpts),
     #[structopt(name = "pl")]
@@ -227,30 +168,6 @@ struct SearchOpts {
 }
 
 #[derive(StructOpt, Debug)]
-struct IdOpts {
-    #[structopt(
-        name = "channel",
-        short = "c",
-        help = "get channel link",
-        group = "search"
-    )]
-    channel: bool,
-    #[structopt(
-        name = "playlist",
-        short = "p",
-        help = "get playlist link",
-        group = "search"
-    )]
-    playlist: bool,
-    #[structopt(name = "video", short = "v", help = "get video link", group = "search")]
-    video: bool,
-    #[structopt(name = "thumbnails", short = "t", help = "get thumbnail by id")]
-    thumbnail: bool,
-    #[structopt(name = "id", required = true)]
-    id: String,
-}
-
-#[derive(StructOpt, Debug)]
 struct ChannelOpts {
     #[structopt(
         name = "playlist",
@@ -285,7 +202,7 @@ fn handle_subcommand(opt: Opts) {
                 SearchOpts { channel: true, .. } => 'c',
                 _ => 'n',
             };
-            let query = ryts::sanitize_query(cfg.query.unwrap()).to_string();
+            let query = sanitize_query(cfg.query.unwrap()).to_string();
             log::info!("Searching for {}...", query);
             if cfg.no_gui {
                 let search_result =
@@ -296,29 +213,6 @@ fn handle_subcommand(opt: Opts) {
             } else {
                 prompt_loop(query, 'g', Some(search_mod));
             }
-        }
-        Subcommands::Id(cfg) => {
-            let id = cfg.id.trim().to_string();
-            let link = match cfg {
-                IdOpts { video: true, .. } => {
-                    if cfg.thumbnail {
-                        format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", &id)
-                    } else {
-                        ["https://www.youtube.com/watch?v=", &id]
-                            .concat()
-                            .to_string()
-                    }
-                }
-                IdOpts { playlist: true, .. } => {
-                    format!("https://youtube.com/playlist?list={}", &id)
-                }
-                IdOpts { channel: true, .. } => {
-                    format!("https://www.youtube.com/channel/{}/videos", &id)
-                }
-                _ => String::new(),
-            };
-            println!("{}", link);
-            exit(0);
         }
         Subcommands::Channel(cfg) => {
             let search_result = yt_search(cfg.id, 'c', None).expect("could not get channel videos");
@@ -347,10 +241,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    use crate::search::*;
     use crate::search_item::{ListEnum, ResponseList};
-    use crate::yt_json::{parse_generic, strip_html_json};
-    use crate::yt_search;
-    use ryts::fetch_yt_thumb;
     use select::{document::Document, predicate::Name};
 
     #[test]

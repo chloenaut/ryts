@@ -1,4 +1,5 @@
 extern crate skim;
+use crate::search::fetch_yt_thumb;
 use skim::{ItemPreview, PreviewContext, SkimItem};
 use std::borrow::Cow;
 use unicode_truncate::{Alignment, UnicodeTruncateStr};
@@ -81,7 +82,7 @@ impl SearchResult {
         match &self.search_data.ex {
             ListEnum::Video(v) => {
                 let new_ex = ListEnum::Video(VideoData {
-                    thumbnail: ryts::fetch_yt_thumb(self.search_data.id.clone()),
+                    thumbnail: fetch_yt_thumb(self.search_data.id.clone()),
                     ..v.clone()
                 });
                 self.search_data = ListItem {
@@ -171,5 +172,10 @@ impl ResponseList {
             ),
             search_data: item.clone(),
         })
+    }
+    pub fn print(self) {
+        for item in self.search_list {
+            item.print();
+        }
     }
 }
