@@ -52,10 +52,48 @@ impl ListItem {
     }
 }
 
+
 #[derive(Clone,Debug)]
 pub struct SearchResult {
     pub search_text: String,
     pub search_data: ListItem,
+}
+
+//TODO optimize thumbnail shennanigans
+// pub fn get_ansi_thumb(id: String) -> String {
+        // let cmd = std::process::Command::new("pixterm")
+    //     .arg("-tc").arg("60")
+    //     .arg("-tr").arg("20")
+    //     .arg(format!("https://i.ytimg.com/vi/{}/default.jpg", id))
+    //     .output().expect("could not get thumb");
+    // String::from_utf8_lossy(&cmd.stdout).to_string()
+// }
+
+impl SearchResult {
+    pub fn _set_thumbnail(&mut self) -> SearchResult {
+        match &self.search_data.ex {
+            ListEnum::Video(v) => {
+                let new_ex = ListEnum::Video(VideoData{ thumbnail: ryts::fetch_yt_thumb(self.search_data.id.clone()), .. v.clone()});
+                self.search_data = ListItem{ ex: new_ex, .. self.search_data.clone()};
+            }
+            _ => {},
+        }
+        self.clone()
+    }
+    pub fn _check_thumbnail(&self) -> bool {
+        match self.search_data.ex.clone() {
+            ListEnum::Video(v) => {
+                !v.thumbnail.is_empty()
+            }
+            _ => { false },
+        }
+    }
+    pub fn print(self) {
+        println!("{} {}\t {}",
+            self.search_data.clone().get_type_char(),
+            self.search_data.name.unicode_pad(100, Alignment::Left, true),
+            self.search_data.id);
+    }
 }
 
 impl<'a> SkimItem for SearchResult {
@@ -68,10 +106,10 @@ impl<'a> SkimItem for SearchResult {
         let preview_text = match item.ex.clone() {
             Video(v) => {
                 format!(
-                    "Video\n\nTitle: {}\nUploader: {}\nLength: {}\nID: {}\n",
-                    item.name, v.channel_name, v.length, item.id, //get_ansi_thumb(item.id.clone())
+                    "Video\n\nTitle: {}\nUploader: {}\nLength: {}\nID: {}\n{}",
+                    item.name, v.channel_name, v.length, item.id, v.thumbnail//fetch_yt_thumb(item.id.clone())
                 )
-                            }
+            }
             Playlist(p) => {
                 format!(
                     "Playlist\n\nTitle: {}\nID: {}\nVideo Count: {}",
@@ -104,12 +142,12 @@ impl ResponseList {
         use ListEnum::*;
         let i_text = match item.ex {
             Video(_) => "▶",
-            Playlist(_) => "≡", 
-            Channel(_) => "@" 
+            Playlist(_) => "≡",
+            Channel(_) => "@"
         };
         self.search_list.push(SearchResult{
-            search_text: format!("{}{}\n", i_text, item.name.unicode_pad(100, Alignment::Left, true)),
-            search_data: item.clone() 
+            search_text: format!("{} {}\n", i_text, item.name.unicode_pad(100, Alignment::Left, true)),
+            search_data: item.clone()
         })
     }
 }

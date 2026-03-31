@@ -5,25 +5,32 @@ authors = ["chlo"]
 edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [dependencies]
-reqwest = { version = "0.11", features = ["json"] }
-tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.11", features = ["json", "blocking"] }
 regex = "1.4.5"
 lazy_static = "1.4.0"
+rayon="*"
+crossbeam="*"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 clap = "2.33"
-dyn-clone = "1.0.4"
 structopt = "0.3.21"
 indicatif = "0.16.2"
 select = "0.5"
 skim = "*"
-async-process = "1.2.0"
 unicode-truncate= "0.2.0"
 env_logger="*"
 log="*"
-async-recursion = "0.2"
-tuikit = "*"
+bytes="*"
+image="*"
 
-# [profile.release]
+[profile.release]
 # debug = true
-# lto = false
+lto = false
+
+[dev-dependencies]
+criterion = "0.3"
+
+[[bench]]
+name = "yt_bench"
+harness = false
+
