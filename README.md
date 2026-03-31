@@ -7,3 +7,4 @@ A program to search youtube from the commandline\
 OpenSSL\
 mpv\
 dmenu
+feh (for thumbnails)
