@@ -6,5 +6,5 @@ A program to search youtube from the commandline\
 **Dependencies**\
 OpenSSL\
 mpv\
-dmenu
+dmenu\
 feh (for thumbnails)
