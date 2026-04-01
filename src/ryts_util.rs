@@ -2,17 +2,18 @@ use std::borrow::Cow;
 use std::env;
 use std::io::Write;
 use std::process::Stdio;
+
 // Play Youtube Video using MPV
+// video_link - youtube video Link
+// video_title - youtube video title
 pub fn play_video(video_link: String, video_title: String) {
     let mpv_command = env::var("MPV_DIR").unwrap_or("mpv".to_string());
-    // let hwdec = env::var("HWDEC_OPT")
-    // .unwrap_or("--hwdec=vaapi".to_string());
     log::info!("Playing video {}", video_title);
     log::info!("Video Link {}", video_link);
 
     let mut cmd = std::process::Command::new(mpv_command);
+    // Set format to MP4 and Resolution to 720p
     cmd.arg(video_link)
-        // .arg(hwdec)
         .arg("--ytdl-format=bestvideo[ext=mp4][height<=?720]+bestaudio[ext=m4a]");
     if !log::log_enabled!(log::Level::Info) {
         cmd.stdout(Stdio::null());
@@ -26,6 +27,7 @@ pub fn play_video(video_link: String, video_title: String) {
 }
 
 // Show Thumbnail with feh
+// id - video ID
 pub fn show_thumbnail(id: String) {
     let _cmd = std::process::Command::new("feh")
         .arg("-B")
@@ -39,6 +41,7 @@ pub fn show_thumbnail(id: String) {
 }
 
 // Sanitizing our query input so we don't get any issues passing it to the request
+// input - unsanitized input string
 pub fn sanitize_query<'a, S: Into<Cow<'a, str>>>(input: S) -> Cow<'a, str> {
     let input = input.into();
     fn is_replace(c: char) -> bool {

@@ -4,14 +4,6 @@ use skim::{ItemPreview, PreviewContext, SkimItem};
 use std::borrow::Cow;
 use unicode_truncate::{Alignment, UnicodeTruncateStr};
 
-/**pub enum QueryType {
-    General,
-    Video,
-    Playlist,
-    Channel,
-    Suggestions,
-}
-*/
 #[derive(Clone, Debug)]
 pub struct VideoData {
     pub length: String,

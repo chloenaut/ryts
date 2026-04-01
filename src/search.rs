@@ -5,21 +5,28 @@ type Error = Box<dyn std::error::Error>;
 use rayon::prelude::*;
 use regex::Regex;
 use select::{document::Document, predicate::Name};
-// JSON Funtions
 
-pub fn strip_html_json(text: &str) -> Option<&str> {
+// JSON Funtions
+// Get JSON From initialData variable in HTML Response
+// html_text - html response in str format
+pub fn strip_html_json(html_text: &str) -> Option<&str> {
     lazy_static! {
         static ref RE: Regex = Regex::new(r"(?:var ytInitialData = )(?P<json>.*)(?:;)").unwrap();
     }
-    RE.captures(text)
+    RE.captures(html_text)
         .and_then(|cap| cap.name("json").as_ref().map(|json| json.as_str()))
 }
 
+// Preforms a blocking get request to youtube
+// url - the url for the get request
 fn get_yt_html(url: String) -> Result<String, reqwest::Error> {
     let resp = reqwest::blocking::get(url)?.text_with_charset("utf-8")?;
     Ok(resp)
 }
 
+// Process HTML Response
+// search_url - the url for the get request
+// String - outputs JSON data
 pub fn get_yt_json(search_url: String) -> String {
     let mut scr_txt: String = String::new();
     let resp_str_f = get_yt_html(search_url);
@@ -38,8 +45,13 @@ pub fn get_yt_json(search_url: String) -> String {
     scr_txt
 }
 
-pub fn parse_generic(result_list: &mut ResponseList, scr_txt: String) -> &ResponseList {
-    let json: serde_json::Value = serde_json::from_str(&scr_txt).unwrap_or_default();
+// Parse Generic Search
+// TODO FIX PLAYLIST HANDLING BECAUSE YOUTUBE BROKE IT
+// result_list - list of results from json
+// src_text - source html text as String
+// ResponseList - List of parsed results
+pub fn parse_generic(result_list: &mut ResponseList, src_txt: String) -> &ResponseList {
+    let json: serde_json::Value = serde_json::from_str(&src_txt).unwrap_or_default();
     let empty_ret: &Vec<serde_json::Value> = &Vec::<serde_json::Value>::new();
 
     let search_contents: &Vec<serde_json::Value> = json["contents"]
@@ -113,6 +125,10 @@ pub fn parse_generic(result_list: &mut ResponseList, scr_txt: String) -> &Respon
     result_list
 }
 
+// Parse Playlist page
+// result_list - list of results from json
+// src_text - source html text as String
+// ResponseList - List of parsed results
 pub fn parse_playlist(result_list: &mut ResponseList, scr_txt: String) -> &ResponseList {
     let empty_ret: &Vec<serde_json::Value> = &Vec::<serde_json::Value>::new();
     let json: serde_json::Value = serde_json::from_str(&scr_txt).unwrap_or_default();
@@ -155,8 +171,12 @@ pub fn parse_playlist(result_list: &mut ResponseList, scr_txt: String) -> &Respo
     result_list
 }
 
-pub fn parse_channel(result_list: &mut ResponseList, scr_txt: String) -> &ResponseList {
-    let json: serde_json::Value = serde_json::from_str(&scr_txt).unwrap_or_default();
+// Parse Channel Page
+// result_list - list of results from json
+// src_text - source html text as String
+// ResponseList - List of parsed results
+pub fn parse_channel(result_list: &mut ResponseList, src_txt: String) -> &ResponseList {
+    let json: serde_json::Value = serde_json::from_str(&src_txt).unwrap_or_default();
     let empty_ret = &Vec::<serde_json::Value>::new();
 
     let search_contents: &Vec<serde_json::Value> = json["contents"]
@@ -193,8 +213,12 @@ pub fn parse_channel(result_list: &mut ResponseList, scr_txt: String) -> &Respon
     result_list
 }
 
-pub fn parse_suggestions(result_list: &mut ResponseList, scr_txt: String) -> &ResponseList {
-    let json: serde_json::Value = serde_json::from_str(&scr_txt).unwrap_or_default();
+// Parse Suggested Videos
+// result_list - list of results from json
+// src_text - source html text as String
+// ResponseList - List of parsed results
+pub fn parse_suggestions(result_list: &mut ResponseList, src_txt: String) -> &ResponseList {
+    let json: serde_json::Value = serde_json::from_str(&src_txt).unwrap_or_default();
     let empty_ret = &Vec::<serde_json::Value>::new();
 
     let search_contents: &Vec<serde_json::Value> = json["contents"]["twoColumnWatchNextResults"]
@@ -229,6 +253,9 @@ pub fn parse_suggestions(result_list: &mut ResponseList, scr_txt: String) -> &Re
     result_list
 }
 
+// Get Search Modifier
+// search_mod - search Modifier
+// String - the youtube modifier as a url parameter
 pub fn get_search_mod(search_mod: char) -> String {
     match search_mod {
         'c' => "&sp=EgIQAg%253D%253D",
@@ -239,6 +266,11 @@ pub fn get_search_mod(search_mod: char) -> String {
     .to_string()
 }
 
+// Query youtube based on search type
+// Change parsing method based on type
+// query - the sanitized query string
+// search_type - search type
+// search_mod - search modifier
 pub fn yt_search(
     query: String,
     search_type: char,
@@ -281,6 +313,9 @@ pub fn yt_search(
     .clone());
 }
 
+// Get thumbnail for video
+// id - video id
+// String - thumbnail as string (it works)
 pub fn fetch_yt_thumb(id: String) -> String {
     let mut thumbnail = String::new();
     let bytes;
