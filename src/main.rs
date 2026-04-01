@@ -13,8 +13,10 @@ mod search_item;
 use crate::search_item::*;
 use skim::prelude::*;
 
+// Display FZF Prompt with list of search results
 fn display_prompt<'a>(mut _result_list: &'a ResponseList) -> SkimOutput {
     let header_text = "Search Results\nCtrl-P : toggle preview\nCtrl-T: show thumbnail";
+    // Bind Key combos to commands
     let binds: Vec<&str> = vec![
         "esc:execute(exit 0)+abort",
         "ctrl-p:toggle-preview",
@@ -40,6 +42,7 @@ fn display_prompt<'a>(mut _result_list: &'a ResponseList) -> SkimOutput {
     output
 }
 
+// Get selected FZF items
 fn get_output_search_list(output: &SkimOutput) -> Vec<ListItem> {
     output
         .selected_items
@@ -66,7 +69,10 @@ fn handle_video_item_actions<'a>(id: String, name: String, key: Key) {
     }
 }
 
+// Search for query and show FZF output, letting user select result to play
+// Do a second query for playlist+channels if selected
 fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
+    // Loading icon :)
     let loading_icon = ProgressBar::new_spinner();
     loading_icon.set_style(
         ProgressStyle::default_bar()
@@ -80,6 +86,7 @@ fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
 
     loading_icon.finish_and_clear();
     loop {
+        // Display FZF Prompt
         let mut output = display_prompt(&results);
         if output.is_abort {
             break;
@@ -87,6 +94,7 @@ fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
         let out_item_o = get_output_search_list(&output);
         let out_item = out_item_o.get(0).unwrap().clone();
         use ListEnum::*;
+        // Check Selected item type and perform action based on that
         match out_item.ex {
             Video(_) => handle_video_item_actions(out_item.id, out_item.name, output.final_key),
             Playlist(_) | Channel(_) => {
@@ -96,6 +104,7 @@ fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
                     None,
                 )
                 .expect("could not get playlist videos");
+                // TODO Make this able to handle suggested videos
                 loop {
                     output = display_prompt(&results);
                     if output.is_abort {
@@ -116,6 +125,7 @@ fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
     }
 }
 
+// CLI Flags and Options Setup
 #[derive(StructOpt, Debug)]
 #[structopt(name = "ryts", no_version)]
 struct Opts {
@@ -193,6 +203,10 @@ struct PlaylistOpts {
     id: String,
 }
 
+// Handle CLI Subcommands
+// Search - Generic search (similar to typing into the input bar on the actual site)
+// Channel - Get videos from channel's page
+// Playlist - Get Videos from playlist based on ID
 fn handle_subcommand(opt: Opts) {
     match opt.commands {
         Subcommands::Search(cfg) => {
@@ -239,6 +253,7 @@ fn main() {
     handle_subcommand(opt);
 }
 
+// Some basic testing to test functionality
 #[cfg(test)]
 mod tests {
     use crate::search::*;
