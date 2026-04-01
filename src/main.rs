@@ -14,6 +14,8 @@ use crate::search_item::*;
 use skim::prelude::*;
 
 // Display FZF Prompt with list of search results
+// * _result_list ResponseList - List of video/playlist/channel items
+// * SkimOutput - Selected Items from FZF
 fn display_prompt<'a>(mut _result_list: &'a ResponseList) -> SkimOutput {
     let header_text = "Search Results\nCtrl-P : toggle preview\nCtrl-T: show thumbnail";
     // Bind Key combos to commands
@@ -43,6 +45,8 @@ fn display_prompt<'a>(mut _result_list: &'a ResponseList) -> SkimOutput {
 }
 
 // Get selected FZF items
+// Output - Skim selected outputs
+// Vec<ListItem> - A more workable Vector of ListItems
 fn get_output_search_list(output: &SkimOutput) -> Vec<ListItem> {
     output
         .selected_items
@@ -59,6 +63,9 @@ fn get_output_search_list(output: &SkimOutput) -> Vec<ListItem> {
 }
 
 // Process video action based on key input
+// id - Youtube video ID
+// name - name of YT Video
+// key - Key pressed
 fn handle_video_item_actions<'a>(id: String, name: String, key: Key) {
     match key {
         Key::Enter => {
@@ -71,6 +78,9 @@ fn handle_video_item_actions<'a>(id: String, name: String, key: Key) {
 
 // Search for query and show FZF output, letting user select result to play
 // Do a second query for playlist+channels if selected
+// query - sanitized query url
+// search_type - type of search to perform represented by a single char
+// search_mod - search modifyer (Optional)
 fn prompt_loop(query: String, search_type: char, search_mod: Option<char>) {
     // Loading icon :)
     let loading_icon = ProgressBar::new_spinner();
@@ -207,6 +217,7 @@ struct PlaylistOpts {
 // Search - Generic search (similar to typing into the input bar on the actual site)
 // Channel - Get videos from channel's page
 // Playlist - Get Videos from playlist based on ID
+// opts - options passed from commandline (args)
 fn handle_subcommand(opt: Opts) {
     match opt.commands {
         Subcommands::Search(cfg) => {
